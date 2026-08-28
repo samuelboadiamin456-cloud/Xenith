@@ -180,34 +180,40 @@ export const PublicProfileView: React.FC = () => {
               </h2>
             </div>
             <span className="font-mono text-xs font-bold text-white bg-slate-900 px-2.5 py-1 rounded border border-slate-800">
-              {player.lifetimeStats.matches} Matches Verified
+              {player.lifetimeStats?.matches ?? 0} Matches Verified
             </span>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
             <div className="p-3.5 rounded-lg bg-slate-900/80 border border-slate-800 text-center">
               <span className="font-mono text-[10px] text-slate-400 uppercase block">KILLS</span>
-              <span className="font-display text-2xl font-black text-white">{player.lifetimeStats.kills}</span>
+              <span className="font-display text-2xl font-black text-white">{player.lifetimeStats?.kills ?? 0}</span>
             </div>
             <div className="p-3.5 rounded-lg bg-slate-900/80 border border-slate-800 text-center">
               <span className="font-mono text-[10px] text-slate-400 uppercase block">WINS</span>
-              <span className="font-display text-2xl font-black text-emerald-400">{player.lifetimeStats.wins}</span>
+              <span className="font-display text-2xl font-black text-emerald-400">{player.lifetimeStats?.wins ?? 0}</span>
             </div>
             <div className="p-3.5 rounded-lg bg-slate-900/80 border border-slate-800 text-center">
               <span className="font-mono text-[10px] text-slate-400 uppercase block">K/D</span>
-              <span className="font-display text-2xl font-black text-cyan-400">{player.lifetimeStats.kd.toFixed(2)}</span>
+              <span className="font-display text-2xl font-black text-cyan-400">
+                {(Number(player.lifetimeStats?.kd) || 0).toFixed(2)}
+              </span>
             </div>
             <div className="p-3.5 rounded-lg bg-slate-900/80 border border-slate-800 text-center">
               <span className="font-mono text-[10px] text-slate-400 uppercase block">WIN RATE</span>
-              <span className="font-display text-2xl font-black text-amber-400">{player.lifetimeStats.winRate.toFixed(1)}%</span>
+              <span className="font-display text-2xl font-black text-amber-400">
+                {(Number(player.lifetimeStats?.winRate) || 0).toFixed(1)}%
+              </span>
             </div>
             <div className="p-3.5 rounded-lg bg-slate-900/80 border border-slate-800 text-center">
               <span className="font-mono text-[10px] text-slate-400 uppercase block">TOTAL XP</span>
-              <span className="font-display text-2xl font-black text-white">{player.totalXp}</span>
+              <span className="font-display text-2xl font-black text-white">{player.totalXp ?? 0}</span>
             </div>
             <div className="p-3.5 rounded-lg bg-slate-900/80 border border-slate-800 text-center">
               <span className="font-mono text-[10px] text-slate-400 uppercase block">HS %</span>
-              <span className="font-display text-2xl font-black text-red-400">{player.lifetimeStats.hs.toFixed(1)}%</span>
+              <span className="font-display text-2xl font-black text-red-400">
+                {(Number(player.lifetimeStats?.hs) || 0).toFixed(1)}%
+              </span>
             </div>
           </div>
 

@@ -229,42 +229,42 @@ export const DashboardView: React.FC = () => {
               <div className="p-4 rounded-lg bg-slate-900/80 border border-slate-800">
                 <span className="font-mono text-[10px] text-slate-400 uppercase block">KILLS</span>
                 <span className="font-display text-2xl sm:text-3xl font-black text-white">
-                  {p.lifetimeStats.kills}
+                  {p.lifetimeStats?.kills ?? 0}
                 </span>
               </div>
 
               <div className="p-4 rounded-lg bg-slate-900/80 border border-slate-800">
                 <span className="font-mono text-[10px] text-slate-400 uppercase block">WINS</span>
                 <span className="font-display text-2xl sm:text-3xl font-black text-emerald-400">
-                  {p.lifetimeStats.wins}
+                  {p.lifetimeStats?.wins ?? 0}
                 </span>
               </div>
 
               <div className="p-4 rounded-lg bg-slate-900/80 border border-slate-800">
                 <span className="font-mono text-[10px] text-slate-400 uppercase block">MATCHES</span>
                 <span className="font-display text-2xl sm:text-3xl font-black text-slate-200">
-                  {p.lifetimeStats.matches}
+                  {p.lifetimeStats?.matches ?? 0}
                 </span>
               </div>
 
               <div className="p-4 rounded-lg bg-slate-900/80 border border-slate-800">
                 <span className="font-mono text-[10px] text-slate-400 uppercase block">K/D RATIO</span>
                 <span className="font-display text-2xl sm:text-3xl font-black text-cyan-400">
-                  {p.lifetimeStats.kd.toFixed(2)}
+                  {(Number(p.lifetimeStats?.kd) || 0).toFixed(2)}
                 </span>
               </div>
 
               <div className="p-4 rounded-lg bg-slate-900/80 border border-slate-800">
                 <span className="font-mono text-[10px] text-slate-400 uppercase block">WIN RATE</span>
                 <span className="font-display text-2xl sm:text-3xl font-black text-amber-400">
-                  {p.lifetimeStats.winRate.toFixed(1)}%
+                  {(Number(p.lifetimeStats?.winRate) || 0).toFixed(1)}%
                 </span>
               </div>
 
               <div className="p-4 rounded-lg bg-slate-900/80 border border-slate-800">
                 <span className="font-mono text-[10px] text-slate-400 uppercase block">HEADSHOT %</span>
                 <span className="font-display text-2xl sm:text-3xl font-black text-red-400">
-                  {p.lifetimeStats.hs.toFixed(1)}%
+                  {(Number(p.lifetimeStats?.hs) || 0).toFixed(1)}%
                 </span>
               </div>
             </div>

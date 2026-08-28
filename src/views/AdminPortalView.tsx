@@ -65,14 +65,14 @@ export const AdminPortalView: React.FC = () => {
               Admin & Command Portal
             </h2>
             <p className="font-body text-xs text-slate-400 leading-relaxed">
-              {!adminStatus.hasInitialAdmin 
+              {!adminStatus?.hasInitialAdmin 
                 ? 'The initial Head of Command account is OPEN for registration. Claim the founding admin role to lock the system.'
                 : 'Staff clearance required. Authorized officers can audit match telemetry, approve operative submissions, and manage staff clearance requests.'}
             </p>
           </div>
 
           <div className="pt-2 space-y-3">
-            {!adminStatus.hasInitialAdmin ? (
+            {!adminStatus?.hasInitialAdmin ? (
               <button
                 onClick={() => openAuthModal('admin-register')}
                 className="w-full py-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-display font-black text-xs uppercase tracking-wider chamfer-btn transition-colors shadow-[0_0_20px_rgba(245,158,11,0.4)] cursor-pointer"

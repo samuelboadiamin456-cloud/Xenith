@@ -248,17 +248,17 @@ export const Navbar: React.FC = () => {
                     {currentPlayer.avatarUrl ? (
                       <img 
                         src={currentPlayer.avatarUrl} 
-                        alt={currentPlayer.displayName} 
+                        alt={currentPlayer.displayName || 'Operative'} 
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
                     ) : (
-                      currentPlayer.displayName.charAt(0)
+                      (currentPlayer.displayName || 'P').charAt(0)
                     )}
                   </div>
                   <span className="absolute -bottom-1 -right-1">
                     <span className="px-1 py-0.2 text-[8px] font-mono font-black rounded bg-orange-500 text-slate-950">
-                      {currentPlayer.currentRank}
+                      {currentPlayer.currentRank || 'E'}
                     </span>
                   </span>
                 </div>
@@ -266,7 +266,7 @@ export const Navbar: React.FC = () => {
                 <div className="hidden sm:block">
                   <div className="flex items-center gap-1.5">
                     <span className="font-mono text-xs font-bold text-slate-100">
-                      {currentPlayer.displayName}
+                      {currentPlayer.displayName || currentPlayer.ign || 'Operative'}
                     </span>
                   </div>
                   <span className="font-mono text-[10px] text-cyan-400 font-semibold block">

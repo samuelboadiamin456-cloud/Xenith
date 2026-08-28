@@ -1,4 +1,4 @@
-const CACHE_NAME = 'xn-academy-cache-v1';
+const CACHE_NAME = 'xn-academy-pwa-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -6,24 +6,26 @@ const STATIC_ASSETS = [
   '/manifest.json'
 ];
 
+// Install: Cache essential shell assets
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch((err) => {
-        console.warn('Failed to cache initial assets:', err);
+        console.warn('[PWA SW] Pre-cache non-fatal note:', err);
       });
     })
   );
   self.skipWaiting();
 });
 
+// Activate: Clean up older caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
+    caches.keys().then((keys) => {
       return Promise.all(
-        cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
-            return caches.delete(cache);
+        keys.map((key) => {
+          if (key !== CACHE_NAME) {
+            return caches.delete(key);
           }
         })
       );
@@ -32,45 +34,65 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Fetch: Safe Network-First with Cache Fallback
 self.addEventListener('fetch', (event) => {
-  // Skip cross-origin and non-GET requests or API calls
-  if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
+  const req = event.request;
+
+  // 1. Only intercept GET requests
+  if (req.method !== 'GET') {
     return;
   }
 
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Fetch in background to update cache (stale-while-revalidate)
-        fetch(event.request)
-          .then((networkResponse) => {
-            if (networkResponse && networkResponse.status === 200) {
-              caches.open(CACHE_NAME).then((cache) => {
-                cache.put(event.request, networkResponse);
-              });
-            }
-          })
-          .catch(() => {});
-        return cachedResponse;
-      }
+  const url = new URL(req.url);
 
-      return fetch(event.request)
-        .then((response) => {
-          if (!response || response.status !== 200 || response.type !== 'basic') {
-            return response;
+  // 2. Ignore non-HTTP/HTTPS (e.g. chrome-extension://)
+  if (!url.protocol.startsWith('http')) {
+    return;
+  }
+
+  // 3. Completely bypass API calls and websocket connections
+  if (url.pathname.startsWith('/api') || url.pathname.includes('socket')) {
+    return;
+  }
+
+  // 4. In development mode or vite internal requests, let network handle directly
+  if (url.pathname.startsWith('/@') || url.pathname.startsWith('/node_modules')) {
+    return;
+  }
+
+  // 5. Handle Navigation / HTML documents
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req).catch(() => {
+        return caches.match('/index.html') || caches.match('/');
+      })
+    );
+    return;
+  }
+
+  // 6. Static image assets (e.g. logo.jpg) - Cache First
+  if (req.destination === 'image' || url.pathname.endsWith('.jpg') || url.pathname.endsWith('.png')) {
+    event.respondWith(
+      caches.match(req).then((cached) => {
+        if (cached) return cached;
+        return fetch(req).then((res) => {
+          if (res && res.status === 200) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, clone));
           }
-          const responseToCache = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
-          return response;
-        })
-        .catch(() => {
-          // Fallback to cached index for navigation
-          if (event.request.mode === 'navigate') {
-            return caches.match('/index.html');
-          }
-        });
+          return res;
+        }).catch(() => new Response('', { status: 404 }));
+      })
+    );
+    return;
+  }
+
+  // 7. For all other resources, let standard fetch execute safely
+  event.respondWith(
+    fetch(req).catch(async () => {
+      const cached = await caches.match(req);
+      if (cached) return cached;
+      return new Response('', { status: 408, statusText: 'Network request failed' });
     })
   );
 });

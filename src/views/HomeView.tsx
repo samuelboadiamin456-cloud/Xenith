@@ -144,15 +144,17 @@ export const HomeView: React.FC = () => {
                   <div className="grid grid-cols-3 gap-2 pt-2">
                     <div className="p-2.5 rounded bg-slate-900/80 border border-slate-800 text-center">
                       <span className="block font-mono text-[10px] text-slate-400 uppercase">RANK</span>
-                      <span className="font-mono text-lg font-black text-amber-400">{featured.currentRank}</span>
+                      <span className="font-mono text-lg font-black text-amber-400">{featured.currentRank || 'E'}</span>
                     </div>
                     <div className="p-2.5 rounded bg-slate-900/80 border border-slate-800 text-center">
                       <span className="block font-mono text-[10px] text-slate-400 uppercase">TOTAL XP</span>
-                      <span className="font-mono text-lg font-black text-cyan-400">{featured.totalXp}</span>
+                      <span className="font-mono text-lg font-black text-cyan-400">{featured.totalXp ?? 0}</span>
                     </div>
                     <div className="p-2.5 rounded bg-slate-900/80 border border-slate-800 text-center">
                       <span className="block font-mono text-[10px] text-slate-400 uppercase">K/D</span>
-                      <span className="font-mono text-lg font-black text-white">{featured.lifetimeStats.kd.toFixed(2)}</span>
+                      <span className="font-mono text-lg font-black text-white">
+                        {(Number(featured.lifetimeStats?.kd) || 0).toFixed(2)}
+                      </span>
                     </div>
                   </div>
 
@@ -292,15 +294,19 @@ export const HomeView: React.FC = () => {
                   <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-slate-800/80 text-center">
                     <div>
                       <span className="block font-mono text-[9px] text-slate-500 uppercase">K/D</span>
-                      <span className="font-mono text-xs font-bold text-slate-200">{p.lifetimeStats.kd.toFixed(2)}</span>
+                      <span className="font-mono text-xs font-bold text-slate-200">
+                        {(Number(p.lifetimeStats?.kd) || 0).toFixed(2)}
+                      </span>
                     </div>
                     <div>
                       <span className="block font-mono text-[9px] text-slate-500 uppercase">WIN RATE</span>
-                      <span className="font-mono text-xs font-bold text-emerald-400">{p.lifetimeStats.winRate.toFixed(0)}%</span>
+                      <span className="font-mono text-xs font-bold text-emerald-400">
+                        {(Number(p.lifetimeStats?.winRate) || 0).toFixed(0)}%
+                      </span>
                     </div>
                     <div>
                       <span className="block font-mono text-[9px] text-slate-500 uppercase">XP</span>
-                      <span className="font-mono text-xs font-bold text-cyan-400">{p.totalXp}</span>
+                      <span className="font-mono text-xs font-bold text-cyan-400">{p.totalXp ?? 0}</span>
                     </div>
                   </div>
 

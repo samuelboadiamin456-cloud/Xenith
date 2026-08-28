@@ -31,9 +31,9 @@ export const LeaderboardView: React.FC = () => {
     return players
       .filter(p => {
         const matchesQuery = 
-          p.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          p.ign.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          p.xnId.toLowerCase().includes(searchQuery.toLowerCase());
+          (p.displayName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+          (p.ign || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+          (p.xnId || '').toLowerCase().includes(searchQuery.toLowerCase());
         
         const matchesRole = roleFilter === 'ALL' || p.role === roleFilter;
         const matchesRank = rankFilter === 'ALL' || p.currentRank === rankFilter;
@@ -41,10 +41,10 @@ export const LeaderboardView: React.FC = () => {
         return matchesQuery && matchesRole && matchesRank;
       })
       .sort((a, b) => {
-        if (sortBy === 'xp') return b.totalXp - a.totalXp;
-        if (sortBy === 'kd') return b.lifetimeStats.kd - a.lifetimeStats.kd;
-        if (sortBy === 'wins') return b.lifetimeStats.wins - a.lifetimeStats.wins;
-        if (sortBy === 'winRate') return b.lifetimeStats.winRate - a.lifetimeStats.winRate;
+        if (sortBy === 'xp') return (b.totalXp ?? 0) - (a.totalXp ?? 0);
+        if (sortBy === 'kd') return (Number(b.lifetimeStats?.kd) || 0) - (Number(a.lifetimeStats?.kd) || 0);
+        if (sortBy === 'wins') return (Number(b.lifetimeStats?.wins) || 0) - (Number(a.lifetimeStats?.wins) || 0);
+        if (sortBy === 'winRate') return (Number(b.lifetimeStats?.winRate) || 0) - (Number(a.lifetimeStats?.winRate) || 0);
         return 0;
       });
   }, [players, searchQuery, roleFilter, rankFilter, sortBy]);
@@ -210,7 +210,7 @@ export const LeaderboardView: React.FC = () => {
                                 referrerPolicy="no-referrer"
                               />
                             ) : (
-                              player.displayName.charAt(0)
+                              (player.displayName || 'P').charAt(0)
                             )}
                           </div>
                           <div>
@@ -241,14 +241,14 @@ export const LeaderboardView: React.FC = () => {
                       {/* Rank Hex Badge */}
                       <td className="py-4 px-4 text-center">
                         <div className="inline-flex justify-center">
-                          <RankHexBadge rank={player.currentRank} size="sm" showDottedRing={false} />
+                          <RankHexBadge rank={player.currentRank || 'E'} size="sm" showDottedRing={false} />
                         </div>
                       </td>
 
                       {/* Total XP */}
                       <td className="py-4 px-4 text-right">
                         <span className="font-bold text-white text-sm">
-                          {player.totalXp.toLocaleString()}
+                          {(player.totalXp ?? 0).toLocaleString()}
                         </span>
                         <span className="text-[10px] text-slate-500 block">XP</span>
                       </td>
@@ -256,20 +256,20 @@ export const LeaderboardView: React.FC = () => {
                       {/* K/D */}
                       <td className="py-4 px-4 text-center">
                         <span className="font-bold text-slate-200">
-                          {player.lifetimeStats.kd.toFixed(2)}
+                          {(Number(player.lifetimeStats?.kd) || 0).toFixed(2)}
                         </span>
                         <span className="text-[10px] text-slate-500 block">
-                          {player.lifetimeStats.kills} Kills
+                          {player.lifetimeStats?.kills ?? 0} Kills
                         </span>
                       </td>
 
                       {/* Wins */}
                       <td className="py-4 px-4 text-center">
                         <span className="font-bold text-emerald-400">
-                          {player.lifetimeStats.wins}
+                          {player.lifetimeStats?.wins ?? 0}
                         </span>
                         <span className="text-[10px] text-slate-500 block">
-                          {player.lifetimeStats.winRate.toFixed(0)}% WR
+                          {(Number(player.lifetimeStats?.winRate) || 0).toFixed(0)}% WR
                         </span>
                       </td>
 

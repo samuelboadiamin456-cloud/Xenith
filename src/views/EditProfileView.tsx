@@ -70,7 +70,7 @@ export const EditProfileView: React.FC = () => {
               />
             ) : (
               <div className="w-full h-full rounded-xl bg-gradient-to-tr from-cyan-600 to-sky-400 text-slate-950 font-display font-black text-3xl flex items-center justify-center">
-                {displayName.charAt(0).toUpperCase()}
+                {(displayName || 'P').charAt(0).toUpperCase()}
               </div>
             )}
           </div>
