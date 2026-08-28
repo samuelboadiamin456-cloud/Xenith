@@ -128,8 +128,17 @@ export const DashboardView: React.FC = () => {
         {/* Profile Card (Left 4 cols) */}
         <div className="lg:col-span-4 bg-gradient-to-b from-[#121822] to-[#0c1016] border border-slate-800 rounded-xl p-6 space-y-6 relative overflow-hidden">
           <div className="flex items-start justify-between">
-            <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 text-slate-950 font-display font-black text-2xl flex items-center justify-center shadow-[0_0_15px_rgba(56,189,248,0.3)]">
-              {p.displayName.charAt(0)}
+            <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 text-slate-950 font-display font-black text-2xl flex items-center justify-center shadow-[0_0_15px_rgba(56,189,248,0.3)] overflow-hidden border border-cyan-400/40">
+              {p.avatarUrl ? (
+                <img 
+                  src={p.avatarUrl} 
+                  alt={p.displayName} 
+                  className="w-full h-full object-cover" 
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                p.displayName.charAt(0)
+              )}
             </div>
 
             <div className="cursor-pointer" onClick={() => triggerRankCelebration(p.currentRank)}>

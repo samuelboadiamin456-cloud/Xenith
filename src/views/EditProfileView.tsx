@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { User, Shield, ArrowLeft, Save } from 'lucide-react';
+import { User, Shield, ArrowLeft, Save, Camera, Sparkles, Check } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Player } from '../types';
+import { AvatarSelectorModal } from '../components/AvatarSelectorModal';
 
 export const EditProfileView: React.FC = () => {
   const { currentPlayer, updateProfile, setActiveView } = useApp();
@@ -19,6 +20,8 @@ export const EditProfileView: React.FC = () => {
   const [role, setRole] = useState<Player['role']>(currentPlayer.role);
   const [country, setCountry] = useState(currentPlayer.country || '');
   const [bio, setBio] = useState(currentPlayer.bio || '');
+  const [avatarUrl, setAvatarUrl] = useState(currentPlayer.avatarUrl || '');
+  const [avatarModalOpen, setAvatarModalOpen] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,7 +30,8 @@ export const EditProfileView: React.FC = () => {
       ign: ign.toUpperCase(),
       role,
       country,
-      bio
+      bio,
+      avatarUrl: avatarUrl || undefined
     });
     setActiveView('dashboard');
   };
@@ -52,6 +56,41 @@ export const EditProfileView: React.FC = () => {
           <p className="font-body text-xs text-slate-400 mt-1">
             Permanent Identifier: <b className="text-cyan-400 font-mono">{currentPlayer.xnId}</b> (Immutable)
           </p>
+        </div>
+
+        {/* Profile Picture Change Section */}
+        <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center gap-4">
+          <div className="relative w-20 h-20 rounded-2xl border-2 border-cyan-500/50 bg-slate-950 p-0.5 overflow-hidden flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(56,189,248,0.2)]">
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt={displayName}
+                className="w-full h-full object-cover rounded-xl"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="w-full h-full rounded-xl bg-gradient-to-tr from-cyan-600 to-sky-400 text-slate-950 font-display font-black text-3xl flex items-center justify-center">
+                {displayName.charAt(0).toUpperCase()}
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1 space-y-1">
+            <span className="font-mono text-xs font-bold text-white uppercase block">
+              Operative Visual Avatar
+            </span>
+            <p className="font-mono text-[11px] text-slate-400">
+              Upload any image from your computer, phone, or link from the web.
+            </p>
+            <button
+              type="button"
+              onClick={() => setAvatarModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 rounded font-mono text-[11px] uppercase font-bold cursor-pointer transition-colors mt-1"
+            >
+              <Camera className="w-3.5 h-3.5" />
+              Change Picture
+            </button>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4 font-mono text-xs">
@@ -117,7 +156,7 @@ export const EditProfileView: React.FC = () => {
           <div className="pt-4 flex gap-3">
             <button
               type="submit"
-              className="flex-1 py-3 bg-[#f4a261] hover:bg-[#ffb378] text-[#2b1400] font-display font-black text-xs uppercase tracking-wider chamfer-btn transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              className="flex-1 py-3 bg-[#f4a261] hover:bg-[#ffb378] text-[#2b1400] font-display font-black text-xs uppercase tracking-wider chamfer-btn transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_0_15px_rgba(244,162,97,0.3)]"
             >
               <Save className="w-4 h-4" /> Save Specifications
             </button>
@@ -131,6 +170,14 @@ export const EditProfileView: React.FC = () => {
           </div>
         </form>
       </div>
+
+      <AvatarSelectorModal
+        isOpen={avatarModalOpen}
+        onClose={() => setAvatarModalOpen(false)}
+        displayName={displayName}
+        currentAvatarUrl={avatarUrl}
+        onSaveAvatar={(url) => setAvatarUrl(url)}
+      />
     </div>
   );
 };

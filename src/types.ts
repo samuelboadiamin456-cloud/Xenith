@@ -42,6 +42,7 @@ export interface Player {
   country?: string;
   bio?: string;
   avatarUrl?: string;
+  password?: string;
   currentRank: RankTier;
   peakRank: RankTier;
   totalXp: number;
@@ -49,6 +50,29 @@ export interface Player {
   verificationStatus: 'Unverified' | 'Verified' | 'Official Vanguard';
   joinedAt: string;
   lifetimeStats: LifetimeStats;
+}
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string;
+  displayName: string;
+  role: 'HEAD_OF_COMMAND' | 'STAFF_OFFICER';
+  isHeadOfCommand: boolean;
+  createdAt: string;
+}
+
+export interface AdminRequest {
+  id: string;
+  username: string;
+  email: string;
+  displayName: string;
+  password?: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
 }
 
 export interface SubmissionStats {

@@ -201,8 +201,17 @@ export const LeaderboardView: React.FC = () => {
                       {/* Operative Info */}
                       <td className="py-4 px-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded bg-gradient-to-br from-slate-700 to-slate-900 border border-slate-700 flex items-center justify-center font-display font-black text-white text-xs shrink-0">
-                            {player.displayName.charAt(0)}
+                          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-slate-700 to-slate-900 border border-slate-700 flex items-center justify-center font-display font-black text-white text-xs shrink-0 overflow-hidden">
+                            {player.avatarUrl ? (
+                              <img 
+                                src={player.avatarUrl} 
+                                alt={player.displayName} 
+                                className="w-full h-full object-cover" 
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              player.displayName.charAt(0)
+                            )}
                           </div>
                           <div>
                             <div className="flex items-center gap-1.5">

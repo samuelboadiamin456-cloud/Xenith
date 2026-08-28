@@ -13,7 +13,9 @@ import {
   Check, 
   Menu, 
   X,
-  Sparkles
+  Sparkles,
+  Crown,
+  Camera
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { RankHexBadge } from './RankHexBadge';
@@ -23,20 +25,22 @@ export const Navbar: React.FC = () => {
     activeView, 
     setActiveView, 
     currentPlayer, 
+    currentAdmin,
     isAdmin, 
     logout, 
     players, 
     loginAsPlayer, 
-    loginAsAdmin,
     submissions,
     triggerRankCelebration,
-    openAuthModal
+    openAuthModal,
+    adminRequests
   } = useApp();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
 
-  const pendingCount = submissions.filter(s => s.status === 'pending' || s.status === 'flagged').length;
+  const pendingCount = submissions.filter(s => s.status === 'pending' || s.status === 'flagged').length +
+    adminRequests.filter(r => r.status === 'pending').length;
 
   const handleNav = (view: typeof activeView) => {
     setActiveView(view);
@@ -142,11 +146,11 @@ export const Navbar: React.FC = () => {
             onClick={() => handleNav('admin')}
             className={`px-3 py-1.5 rounded-md font-mono text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
               activeView === 'admin'
-                ? 'bg-red-500/10 text-red-400 border border-red-500/30 shadow-[0_0_12px_rgba(239,68,68,0.2)]'
+                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 shadow-[0_0_12px_rgba(245,158,11,0.2)]'
                 : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
             }`}
           >
-            <Lock className="w-3.5 h-3.5" />
+            {isAdmin ? <Crown className="w-3.5 h-3.5 text-amber-400" /> : <Lock className="w-3.5 h-3.5" />}
             Admin
             {pendingCount > 0 && (
               <span className="w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-mono font-bold flex items-center justify-center">
@@ -158,15 +162,85 @@ export const Navbar: React.FC = () => {
 
         {/* Right Section: Identity Chip & Switcher */}
         <div className="flex items-center gap-3">
-          {currentPlayer ? (
+          {isAdmin && currentAdmin ? (
+            /* ADMIN PROFILE CHIP */
+            <div className="relative">
+              <button
+                onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
+                className="flex items-center gap-2.5 p-1.5 pr-3 bg-amber-950/30 border border-amber-500/40 hover:border-amber-400 rounded-lg text-left transition-colors cursor-pointer"
+              >
+                <div className="w-8 h-8 rounded bg-gradient-to-tr from-amber-600 to-yellow-400 text-slate-950 font-display font-black text-sm flex items-center justify-center shadow-sm">
+                  <Crown className="w-4 h-4" />
+                </div>
+
+                <div className="hidden sm:block">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-xs font-bold text-amber-300">
+                      {currentAdmin.displayName}
+                    </span>
+                  </div>
+                  <span className="font-mono text-[9px] text-amber-400/80 font-bold uppercase block">
+                    {currentAdmin.isHeadOfCommand ? 'HEAD OF COMMAND' : 'STAFF OFFICER'}
+                  </span>
+                </div>
+
+                <ChevronDown className="w-4 h-4 text-amber-400" />
+              </button>
+
+              {profileDropdownOpen && (
+                <div 
+                  className="absolute right-0 mt-2 w-64 bg-[#0d1218] border border-amber-500/30 rounded-xl shadow-2xl p-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150"
+                  onClick={() => setProfileDropdownOpen(false)}
+                >
+                  <div className="px-3 py-2 border-b border-slate-800/80 mb-2">
+                    <p className="font-mono text-xs font-bold text-white flex items-center gap-1.5">
+                      <Crown className="w-3.5 h-3.5 text-amber-400" />
+                      {currentAdmin.displayName}
+                    </p>
+                    <p className="font-mono text-[11px] text-amber-400">
+                      @{currentAdmin.username} · {currentAdmin.email}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => handleNav('admin')}
+                    className="w-full px-3 py-2 text-left font-mono text-xs text-amber-300 hover:bg-amber-500/10 rounded flex items-center gap-2 cursor-pointer"
+                  >
+                    <Crown className="w-3.5 h-3.5" />
+                    Admin Command Portal
+                  </button>
+
+                  <div className="border-t border-slate-800/80 mt-2 pt-1">
+                    <button
+                      onClick={logout}
+                      className="w-full px-3 py-2 text-left font-mono text-xs text-red-400 hover:bg-red-500/10 rounded flex items-center gap-2 cursor-pointer"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      Exit Admin Mode
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : currentPlayer ? (
+            /* PLAYER PROFILE CHIP WITH CUSTOM AVATAR */
             <div className="relative">
               <button
                 onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
                 className="flex items-center gap-2.5 p-1.5 pr-3 bg-slate-900/90 border border-slate-800 hover:border-slate-700 rounded-lg text-left transition-colors cursor-pointer"
               >
                 <div className="relative">
-                  <div className="w-8 h-8 rounded bg-gradient-to-tr from-cyan-600 to-sky-400 text-slate-950 font-display font-black text-sm flex items-center justify-center">
-                    {currentPlayer.displayName.charAt(0)}
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-sky-400 text-slate-950 font-display font-black text-sm flex items-center justify-center overflow-hidden border border-cyan-500/30">
+                    {currentPlayer.avatarUrl ? (
+                      <img 
+                        src={currentPlayer.avatarUrl} 
+                        alt={currentPlayer.displayName} 
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      currentPlayer.displayName.charAt(0)
+                    )}
                   </div>
                   <span className="absolute -bottom-1 -right-1">
                     <span className="px-1 py-0.2 text-[8px] font-mono font-black rounded bg-orange-500 text-slate-950">
@@ -228,30 +302,9 @@ export const Navbar: React.FC = () => {
                     onClick={() => handleNav('edit-profile')}
                     className="w-full px-3 py-2 text-left font-mono text-xs text-slate-300 hover:text-white hover:bg-slate-800/60 rounded flex items-center gap-2 cursor-pointer"
                   >
-                    <User className="w-3.5 h-3.5 text-slate-400" />
-                    Edit Profile
+                    <Camera className="w-3.5 h-3.5 text-slate-400" />
+                    Change Profile Picture
                   </button>
-
-                  {/* Switch Account Quick Demo */}
-                  <div className="border-t border-slate-800/80 my-2 pt-2">
-                    <p className="px-3 py-1 font-mono text-[10px] text-slate-500 uppercase tracking-wider">
-                      Switch Operative Demo
-                    </p>
-                    {players.slice(0, 3).map(p => (
-                      <button
-                        key={p.xnId}
-                        onClick={() => loginAsPlayer(p.xnId)}
-                        className={`w-full px-3 py-1.5 text-left font-mono text-xs rounded flex items-center justify-between cursor-pointer ${
-                          currentPlayer.xnId === p.xnId
-                            ? 'text-cyan-400 bg-cyan-500/10'
-                            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
-                        }`}
-                      >
-                        <span>{p.displayName}</span>
-                        <span className="text-[10px] text-slate-500">{p.xnId} ({p.currentRank})</span>
-                      </button>
-                    ))}
-                  </div>
 
                   <div className="border-t border-slate-800/80 mt-2 pt-1">
                     <button
@@ -339,7 +392,7 @@ export const Navbar: React.FC = () => {
           <button
             onClick={() => handleNav('admin')}
             className={`w-full text-left px-3 py-2.5 rounded font-mono text-xs font-bold uppercase tracking-wider ${
-              activeView === 'admin' ? 'bg-red-500/20 text-red-400' : 'text-slate-300'
+              activeView === 'admin' ? 'bg-amber-500/20 text-amber-400' : 'text-slate-300'
             }`}
           >
             Admin Portal ({pendingCount} pending)

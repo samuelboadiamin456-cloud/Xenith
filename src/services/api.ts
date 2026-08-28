@@ -1,4 +1,4 @@
-import { Player, Submission, AuditLog, AdminStats, SubmissionStats } from '../types';
+import { Player, Submission, AuditLog, AdminStats, SubmissionStats, AdminUser, AdminRequest } from '../types';
 
 export const api = {
   // Check backend health
@@ -44,11 +44,13 @@ export const api = {
   async registerPlayer(playerData: {
     username: string;
     email: string;
+    password?: string;
     displayName: string;
     ign: string;
     role: Player['role'];
     country?: string;
     bio?: string;
+    avatarUrl?: string;
   }): Promise<{ player: Player; auditLog?: AuditLog }> {
     const res = await fetch('/api/players/register', {
       method: 'POST',
@@ -59,6 +61,21 @@ export const api = {
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
       throw new Error(errorData.error || 'Failed to register operative');
+    }
+
+    return await res.json();
+  },
+
+  async loginPlayer(identifier: string, password?: string): Promise<{ player: Player; message: string }> {
+    const res = await fetch('/api/players/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier, password })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Authentication failed');
     }
 
     return await res.json();
@@ -176,6 +193,123 @@ export const api = {
       return await res.json();
     } catch {
       return null;
+    }
+  },
+
+  // --- ADMIN AUTH & APPROVAL APIS ---
+  async getAdminStatus(): Promise<{ hasInitialAdmin: boolean; totalAdmins: number; pendingRequestsCount: number }> {
+    try {
+      const res = await fetch('/api/admin/status');
+      if (!res.ok) return { hasInitialAdmin: false, totalAdmins: 0, pendingRequestsCount: 0 };
+      return await res.json();
+    } catch {
+      return { hasInitialAdmin: false, totalAdmins: 0, pendingRequestsCount: 0 };
+    }
+  },
+
+  async bootstrapFirstAdmin(data: {
+    username: string;
+    email: string;
+    password: string;
+    displayName: string;
+  }): Promise<{ admin: AdminUser; auditLog?: AuditLog }> {
+    const res = await fetch('/api/admin/bootstrap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to initialize Head of Command');
+    }
+
+    return await res.json();
+  },
+
+  async requestAdminAccess(data: {
+    username: string;
+    email: string;
+    password: string;
+    displayName: string;
+    reason?: string;
+  }): Promise<{ message: string; request: AdminRequest }> {
+    const res = await fetch('/api/admin/request-access', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to submit clearance application');
+    }
+
+    return await res.json();
+  },
+
+  async loginAdmin(identifier: string, password: string): Promise<{ admin: AdminUser; message: string }> {
+    const res = await fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier, password })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Admin authentication failed');
+    }
+
+    return await res.json();
+  },
+
+  async getAdminRequests(): Promise<AdminRequest[]> {
+    try {
+      const res = await fetch('/api/admin/requests');
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.requests || [];
+    } catch {
+      return [];
+    }
+  },
+
+  async approveAdminRequest(id: string): Promise<{ message: string; request: AdminRequest; newAdmin: AdminUser }> {
+    const res = await fetch(`/api/admin/requests/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to approve clearance request');
+    }
+
+    return await res.json();
+  },
+
+  async rejectAdminRequest(id: string): Promise<{ message: string; request: AdminRequest }> {
+    const res = await fetch(`/api/admin/requests/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to reject clearance request');
+    }
+
+    return await res.json();
+  },
+
+  async getAdmins(): Promise<AdminUser[]> {
+    try {
+      const res = await fetch('/api/admin/list');
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.admins || [];
+    } catch {
+      return [];
     }
   }
 };

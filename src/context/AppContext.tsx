@@ -7,7 +7,9 @@ import {
   ActiveView, 
   RankTier, 
   SubmissionStats, 
-  AdminStats 
+  AdminStats,
+  AdminUser,
+  AdminRequest
 } from '../types';
 import { INITIAL_PLAYERS, INITIAL_SUBMISSIONS, INITIAL_AUDIT_LOGS } from '../data/initialData';
 import { calculateRank, calculateSubmissionScore, RANK_CONFIGS } from '../data/rankConfigs';
@@ -18,7 +20,10 @@ interface AppContextType {
   submissions: Submission[];
   auditLogs: AuditLog[];
   currentPlayer: Player | null;
+  currentAdmin: AdminUser | null;
   isAdmin: boolean;
+  adminRequests: AdminRequest[];
+  adminStatus: { hasInitialAdmin: boolean; totalAdmins: number; pendingRequestsCount: number };
   activeView: ActiveView;
   selectedProfileXnId: string | null;
   celebrationRank: RankTier | null;
@@ -26,28 +31,49 @@ interface AppContextType {
   toastMessage: { text: string; type: 'success' | 'error' | 'info' } | null;
   adminStats: AdminStats;
   authModalOpen: boolean;
-  authModalMode: 'login' | 'register';
-  openAuthModal: (mode?: 'login' | 'register') => void;
+  authModalMode: 'login' | 'register' | 'admin-login' | 'admin-register';
+  openAuthModal: (mode?: 'login' | 'register' | 'admin-login' | 'admin-register') => void;
   closeAuthModal: () => void;
   
   // Navigation
   setActiveView: (view: ActiveView) => void;
   viewPlayerProfile: (xnId: string) => void;
   
-  // Auth
-  loginAsPlayer: (identifier: string) => boolean;
-  loginAsAdmin: () => void;
+  // Player Auth
+  loginAsPlayer: (identifier: string, password?: string) => Promise<boolean>;
   logout: () => void;
   registerPlayer: (data: {
     username: string;
     email: string;
+    password?: string;
     displayName: string;
     ign: string;
     role: Player['role'];
     country?: string;
     bio?: string;
+    avatarUrl?: string;
   }) => Promise<Player>;
   updateProfile: (updatedData: Partial<Player>) => Promise<void>;
+  updateAvatar: (avatarUrl: string) => Promise<void>;
+
+  // Admin Auth & Clearance Workflow
+  bootstrapFirstAdmin: (data: {
+    username: string;
+    email: string;
+    password: string;
+    displayName: string;
+  }) => Promise<void>;
+  requestAdminAccess: (data: {
+    username: string;
+    email: string;
+    password: string;
+    displayName: string;
+    reason?: string;
+  }) => Promise<void>;
+  loginAsAdmin: (identifier: string, password: string) => Promise<boolean>;
+  approveAdminRequest: (requestId: string) => Promise<void>;
+  rejectAdminRequest: (requestId: string) => Promise<void>;
+  refreshAdminData: () => Promise<void>;
   
   // Submissions
   createSubmission: (stats: SubmissionStats, evidenceUrl?: string) => Promise<Submission>;
@@ -69,7 +95,9 @@ const STORAGE_KEY_PLAYERS = 'xn_academy_players_v1';
 const STORAGE_KEY_SUBS = 'xn_academy_submissions_v1';
 const STORAGE_KEY_LOGS = 'xn_academy_logs_v1';
 const STORAGE_KEY_USER = 'xn_academy_current_user_v1';
+const STORAGE_KEY_ADMIN_USER = 'xn_academy_admin_user_v1';
 const STORAGE_KEY_ADMIN = 'xn_academy_is_admin_v1';
+const STORAGE_KEY_ADMIN_REQUESTS = 'xn_academy_admin_requests_v1';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [players, setPlayers] = useState<Player[]>(() => {
@@ -99,8 +127,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return null;
   });
 
+  const [currentAdmin, setCurrentAdmin] = useState<AdminUser | null>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_ADMIN_USER);
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     return localStorage.getItem(STORAGE_KEY_ADMIN) === 'true';
+  });
+
+  const [adminRequests, setAdminRequests] = useState<AdminRequest[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY_ADMIN_REQUESTS);
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [adminStatus, setAdminStatus] = useState<{
+    hasInitialAdmin: boolean;
+    totalAdmins: number;
+    pendingRequestsCount: number;
+  }>({
+    hasInitialAdmin: false,
+    totalAdmins: 0,
+    pendingRequestsCount: 0
   });
 
   const [activeView, setActiveView] = useState<ActiveView>('home');
@@ -109,9 +164,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [showCelebration, setShowCelebration] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
-  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('register');
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'admin-login' | 'admin-register'>('register');
 
-  const openAuthModal = (mode: 'login' | 'register' = 'register') => {
+  const openAuthModal = (mode: 'login' | 'register' | 'admin-login' | 'admin-register' = 'register') => {
     setAuthModalMode(mode);
     setAuthModalOpen(true);
   };
@@ -120,15 +175,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAuthModalOpen(false);
   };
 
+  // Sync admin data from server
+  const refreshAdminData = async () => {
+    try {
+      const [status, requests] = await Promise.all([
+        api.getAdminStatus(),
+        api.getAdminRequests()
+      ]);
+      setAdminStatus(status);
+      if (requests && requests.length >= 0) {
+        setAdminRequests(requests);
+      }
+    } catch (err) {
+      console.warn('[Admin Sync Error]', err);
+    }
+  };
+
   // Initial Fetch & Sync from Backend APIs
   useEffect(() => {
     let isMounted = true;
     const fetchBackendData = async () => {
       try {
-        const [serverPlayers, serverSubs, serverLogs] = await Promise.all([
+        const [serverPlayers, serverSubs, serverLogs, status, requests] = await Promise.all([
           api.getPlayers(),
           api.getSubmissions(),
-          api.getAuditLogs()
+          api.getAuditLogs(),
+          api.getAdminStatus(),
+          api.getAdminRequests()
         ]);
 
         if (isMounted) {
@@ -140,6 +213,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           if (serverLogs && serverLogs.length > 0) {
             setAuditLogs(serverLogs);
+          }
+          if (status) {
+            setAdminStatus(status);
+          }
+          if (requests) {
+            setAdminRequests(requests);
           }
         }
       } catch (err) {
@@ -153,7 +232,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Sync state to local storage
+  // Save to localStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_PLAYERS, JSON.stringify(players));
   }, [players]);
@@ -175,8 +254,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentPlayer]);
 
   useEffect(() => {
+    if (currentAdmin) {
+      localStorage.setItem(STORAGE_KEY_ADMIN_USER, JSON.stringify(currentAdmin));
+    } else {
+      localStorage.removeItem(STORAGE_KEY_ADMIN_USER);
+    }
+  }, [currentAdmin]);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEY_ADMIN, isAdmin ? 'true' : 'false');
   }, [isAdmin]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_ADMIN_REQUESTS, JSON.stringify(adminRequests));
+  }, [adminRequests]);
 
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToastMessage({ text, type });
@@ -188,14 +279,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const triggerRankCelebration = (rank: RankTier) => {
     setCelebrationRank(rank);
     setShowCelebration(true);
-    
-    // Trigger confetti fireworks
+
     try {
       confetti({
-        particleCount: 80,
-        spread: 70,
+        particleCount: 120,
+        spread: 80,
         origin: { y: 0.6 },
-        colors: ['#38bdf8', '#f59e0b', '#00f2ff', '#f4a261', '#ffffff']
+        colors: ['#06b6d4', '#f4a261', '#e76f51', '#3b82f6', '#10b981']
       });
     } catch {
       // Fallback gracefully
@@ -212,31 +302,136 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const loginAsPlayer = (identifier: string): boolean => {
+  // Player Login with Password Enforcement
+  const loginAsPlayer = async (identifier: string, password?: string): Promise<boolean> => {
     const clean = identifier.trim().toLowerCase();
+
+    // Try backend API login
+    try {
+      const response = await api.loginPlayer(identifier, password);
+      if (response && response.player) {
+        setCurrentPlayer(response.player);
+        setIsAdmin(false);
+        setCurrentAdmin(null);
+        showToast(`Clearance verified. Welcome back, Operative ${response.player.displayName} (${response.player.xnId})`, 'success');
+        return true;
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Invalid player credentials', 'error');
+      return false;
+    }
+
+    // Local fallback
     const found = players.find(
       p => p.xnId.toLowerCase() === clean || 
            p.username.toLowerCase() === clean || 
            p.email.toLowerCase() === clean ||
            p.ign.toLowerCase() === clean
     );
+
     if (found) {
+      if (found.password && password && found.password !== password) {
+        showToast('Invalid operative password', 'error');
+        return false;
+      }
       setCurrentPlayer(found);
       setIsAdmin(false);
+      setCurrentAdmin(null);
       showToast(`Welcome back, Operative ${found.displayName} (${found.xnId})`, 'success');
       return true;
     }
-    showToast('Player ID, username or email not recognized', 'error');
+
+    showToast('Operative ID, username or email not recognized', 'error');
     return false;
   };
 
-  const loginAsAdmin = () => {
-    setIsAdmin(true);
-    showToast('Administrator security clearance granted', 'success');
+  // Admin Bootstrap (First Head of Command)
+  const bootstrapFirstAdmin = async (data: {
+    username: string;
+    email: string;
+    password: string;
+    displayName: string;
+  }) => {
+    try {
+      const res = await api.bootstrapFirstAdmin(data);
+      setCurrentAdmin(res.admin);
+      setIsAdmin(true);
+      setCurrentPlayer(null);
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      await refreshAdminData();
+      showToast(`Head of Command Clearance Activated! Welcome, ${res.admin.displayName}. Direct admin registration is now closed.`, 'success');
+      setActiveView('admin');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to initialize Head of Command account', 'error');
+      throw err;
+    }
+  };
+
+  // Admin Access Request
+  const requestAdminAccess = async (data: {
+    username: string;
+    email: string;
+    password: string;
+    displayName: string;
+    reason?: string;
+  }) => {
+    try {
+      const res = await api.requestAdminAccess(data);
+      await refreshAdminData();
+      showToast(res.message || 'Clearance application submitted. Awaiting Head of Command review.', 'info');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to submit clearance application', 'error');
+      throw err;
+    }
+  };
+
+  // Admin Login
+  const loginAsAdmin = async (identifier: string, password: string): Promise<boolean> => {
+    try {
+      const res = await api.loginAdmin(identifier, password);
+      if (res && res.admin) {
+        setCurrentAdmin(res.admin);
+        setIsAdmin(true);
+        setCurrentPlayer(null);
+        await refreshAdminData();
+        showToast(`Staff Clearance Granted. Welcome ${res.admin.displayName} (${res.admin.role.replace('_', ' ')})`, 'success');
+        setActiveView('admin');
+        return true;
+      }
+      return false;
+    } catch (err: any) {
+      showToast(err.message || 'Admin authentication failed', 'error');
+      return false;
+    }
+  };
+
+  // Approve Admin Request
+  const approveAdminRequest = async (requestId: string) => {
+    try {
+      const res = await api.approveAdminRequest(requestId);
+      await refreshAdminData();
+      showToast(res.message || 'Clearance request approved! New officer provisioned.', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to approve request', 'error');
+    }
+  };
+
+  // Reject Admin Request
+  const rejectAdminRequest = async (requestId: string) => {
+    try {
+      await api.rejectAdminRequest(requestId);
+      await refreshAdminData();
+      showToast('Clearance request rejected.', 'info');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to reject request', 'error');
+    }
   };
 
   const logout = () => {
     setCurrentPlayer(null);
+    setCurrentAdmin(null);
     setIsAdmin(false);
     showToast('Logged out of session', 'info');
     setActiveView('home');
@@ -245,14 +440,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const registerPlayer = async (data: {
     username: string;
     email: string;
+    password?: string;
     displayName: string;
     ign: string;
     role: Player['role'];
     country?: string;
     bio?: string;
+    avatarUrl?: string;
   }): Promise<Player> => {
     try {
-      // Try backend API registration first
       const result = await api.registerPlayer(data);
       const newPlayer = result.player;
       setPlayers(prev => [newPlayer, ...prev]);
@@ -263,7 +459,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast(`Account created! Your permanent ID is ${newPlayer.xnId}`, 'success');
       return newPlayer;
     } catch (err: any) {
-      // Client-side fallback if offline
+      // Local fallback
       const existingNumbers = players.map(p => {
         const match = p.xnId.match(/XN-(\d+)/);
         return match ? parseInt(match[1], 10) : 0;
@@ -277,11 +473,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         xnId: formattedId,
         username: data.username,
         email: data.email,
+        password: data.password,
         displayName: data.displayName,
         ign: data.ign.toUpperCase(),
         role: data.role,
         country: data.country || 'Global',
         bio: data.bio || 'New Academy operative undergoing verified performance clearance.',
+        avatarUrl: data.avatarUrl,
         currentRank: 'E',
         peakRank: 'E',
         totalXp: 50,
@@ -328,6 +526,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setPlayers(prev => prev.map(p => (p.id === updated.id ? updated : p)));
     }
     showToast('Profile specifications updated', 'success');
+  };
+
+  const updateAvatar = async (avatarUrl: string) => {
+    if (!currentPlayer) return;
+    await updateProfile({ avatarUrl });
+    showToast('Operative profile visual avatar updated successfully', 'success');
   };
 
   const createSubmission = async (stats: SubmissionStats, evidenceUrl?: string): Promise<Submission> => {
@@ -419,7 +623,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setSubmissions(prev => prev.map(s => 
       s.id === submissionId 
-        ? { ...s, status: 'approved', reviewedBy: 'Admin_Lead', reviewedAt: new Date().toISOString() } 
+        ? { ...s, status: 'approved', reviewedBy: currentAdmin?.displayName || 'Admin_Lead', reviewedAt: new Date().toISOString() } 
         : s
     ));
 
@@ -451,8 +655,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       };
 
-      setPlayers(prev => prev.map(p => p.xnId === targetPlayer.xnId ? updatedPlayer : p));
-      
+      setPlayers(prev => prev.map(p => (p.xnId === targetPlayer.xnId ? updatedPlayer : p)));
+
       if (currentPlayer?.xnId === targetPlayer.xnId) {
         setCurrentPlayer(updatedPlayer);
       }
@@ -467,11 +671,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       action: 'SUBMISSION_APPROVED',
       timestamp: new Date().toISOString(),
       actorType: 'admin',
-      details: `${sub.id} (${sub.playerName}) approved. +${awardedXp} XP awarded.`
+      details: `Submission ${submissionId} approved for ${sub.playerName} (+${awardedXp} XP)`
     };
     setAuditLogs(prev => [log, ...prev]);
-
-    showToast(`Submission ${sub.id} Approved (+${awardedXp} XP)`, 'success');
+    showToast(`Submission ${submissionId} Approved (+${awardedXp} XP)`, 'success');
   };
 
   const flagSubmission = async (submissionId: string) => {
@@ -483,7 +686,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (result.auditLog) {
         setAuditLogs(prev => [result.auditLog!, ...prev]);
       }
-      showToast(`Submission ${submissionId} marked as FLAGGED`, 'info');
+      showToast(`Submission ${submissionId} Flagged for Telemetry Audit`, 'info');
       return;
     } catch {
       // Fallback
@@ -498,10 +701,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       action: 'SUBMISSION_FLAGGED',
       timestamp: new Date().toISOString(),
       actorType: 'admin',
-      details: `Submission ${submissionId} placed on hold for anti-cheat verification.`
+      details: `Submission ${submissionId} flagged for anti-cheat verification`
     };
     setAuditLogs(prev => [log, ...prev]);
-    showToast(`Submission ${submissionId} marked as FLAGGED`, 'info');
+    showToast(`Submission ${submissionId} Flagged for Review`, 'info');
   };
 
   const rejectSubmission = async (submissionId: string, reason: string) => {
@@ -520,7 +723,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setSubmissions(prev => prev.map(s => 
-      s.id === submissionId ? { ...s, status: 'rejected', rejectionReason: reason, reviewedBy: 'Admin_Lead', reviewedAt: new Date().toISOString() } : s
+      s.id === submissionId ? { ...s, status: 'rejected', rejectionReason: reason, reviewedBy: currentAdmin?.displayName || 'Admin_Lead', reviewedAt: new Date().toISOString() } : s
     ));
 
     const log: AuditLog = {
@@ -552,7 +755,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         submissions,
         auditLogs,
         currentPlayer,
+        currentAdmin,
         isAdmin,
+        adminRequests,
+        adminStatus,
         activeView,
         selectedProfileXnId,
         celebrationRank,
@@ -566,10 +772,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveView,
         viewPlayerProfile,
         loginAsPlayer,
+        bootstrapFirstAdmin,
+        requestAdminAccess,
         loginAsAdmin,
+        approveAdminRequest,
+        rejectAdminRequest,
+        refreshAdminData,
         logout,
         registerPlayer,
         updateProfile,
+        updateAvatar,
         createSubmission,
         approveSubmission,
         flagSubmission,
@@ -591,4 +803,3 @@ export const useApp = () => {
   }
   return context;
 };
-

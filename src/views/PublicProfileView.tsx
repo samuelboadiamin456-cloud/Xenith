@@ -92,8 +92,17 @@ export const PublicProfileView: React.FC = () => {
 
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-6">
           <div className="flex items-center gap-5">
-            <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-gradient-to-br from-cyan-500 to-sky-600 text-slate-950 font-display font-black text-3xl sm:text-4xl flex items-center justify-center shadow-[0_0_20px_rgba(56,189,248,0.3)] shrink-0">
-              {player.displayName.charAt(0)}
+            <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-2xl bg-gradient-to-br from-cyan-500 to-sky-600 text-slate-950 font-display font-black text-3xl sm:text-4xl flex items-center justify-center shadow-[0_0_20px_rgba(56,189,248,0.3)] shrink-0 overflow-hidden border-2 border-cyan-400/40">
+              {player.avatarUrl ? (
+                <img 
+                  src={player.avatarUrl} 
+                  alt={player.displayName} 
+                  className="w-full h-full object-cover" 
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                player.displayName.charAt(0)
+              )}
             </div>
 
             <div className="space-y-1">

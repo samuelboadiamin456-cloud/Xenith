@@ -25,6 +25,7 @@ export interface Player {
   country?: string;
   bio?: string;
   avatarUrl?: string;
+  password?: string;
   currentRank: RankTier;
   peakRank: RankTier;
   totalXp: number;
@@ -32,6 +33,30 @@ export interface Player {
   verificationStatus: 'Unverified' | 'Verified' | 'Official Vanguard';
   joinedAt: string;
   lifetimeStats: LifetimeStats;
+}
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string;
+  displayName: string;
+  password?: string;
+  role: 'HEAD_OF_COMMAND' | 'STAFF_OFFICER';
+  isHeadOfCommand: boolean;
+  createdAt: string;
+}
+
+export interface AdminRequest {
+  id: string;
+  username: string;
+  email: string;
+  displayName: string;
+  password?: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
 }
 
 export interface SubmissionStats {
@@ -79,6 +104,8 @@ export interface AuditLog {
 let dbPlayers: Player[] = [];
 let dbSubmissions: Submission[] = [];
 let dbAuditLogs: AuditLog[] = [];
+let dbAdmins: AdminUser[] = [];
+let dbAdminRequests: AdminRequest[] = [];
 
 // Rank Calculation Logic
 function calculateRank(xp: number): RankTier {
@@ -179,7 +206,7 @@ async function startServer() {
 
   // POST Register new player
   app.post('/api/players/register', (req: Request, res: Response) => {
-    const { username, email, displayName, ign, role, country, bio } = req.body;
+    const { username, email, password, displayName, ign, role, country, bio, avatarUrl } = req.body;
 
     if (!username || !displayName || !ign || !role) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -207,11 +234,13 @@ async function startServer() {
       xnId: formattedId,
       username: username.trim(),
       email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+      password: password ? String(password) : undefined,
       displayName: displayName.trim(),
       ign: ign.trim().toUpperCase(),
       role,
       country: country ? country.trim() : 'Global',
       bio: bio ? bio.trim() : 'Verified recruit of the XN Academy competitive network.',
+      avatarUrl: avatarUrl || undefined,
       currentRank: 'E',
       peakRank: 'E',
       totalXp: 50, // Welcome signup bonus
@@ -240,7 +269,41 @@ async function startServer() {
     };
     dbAuditLogs.unshift(log);
 
-    res.status(201).json({ player: newPlayer, auditLog: log });
+    // Return player without leaking password
+    const { password: _, ...safePlayer } = newPlayer;
+    res.status(201).json({ player: safePlayer, auditLog: log });
+  });
+
+  // POST Login player
+  app.post('/api/players/login', (req: Request, res: Response) => {
+    const { identifier, password } = req.body;
+
+    if (!identifier) {
+      return res.status(400).json({ error: 'Identifier is required' });
+    }
+
+    const clean = identifier.trim().toLowerCase();
+    const player = dbPlayers.find(
+      p =>
+        p.xnId.toLowerCase() === clean ||
+        p.username.toLowerCase() === clean ||
+        p.email.toLowerCase() === clean ||
+        p.ign.toLowerCase() === clean
+    );
+
+    if (!player) {
+      return res.status(404).json({ error: 'Operative not found with provided identifier' });
+    }
+
+    // If player registered with a password, enforce password match
+    if (player.password && password !== undefined) {
+      if (player.password !== String(password)) {
+        return res.status(401).json({ error: 'Invalid operative clearance password' });
+      }
+    }
+
+    const { password: _, ...safePlayer } = player;
+    res.json({ player: safePlayer, message: 'Authentication successful' });
   });
 
   // PUT update player profile
@@ -255,7 +318,7 @@ async function startServer() {
     }
 
     const current = dbPlayers[playerIndex];
-    const { displayName, ign, role, country, bio } = req.body;
+    const { displayName, ign, role, country, bio, avatarUrl } = req.body;
 
     const updated: Player = {
       ...current,
@@ -263,12 +326,14 @@ async function startServer() {
       ign: ign ? ign.trim().toUpperCase() : current.ign,
       role: role || current.role,
       country: country !== undefined ? country.trim() : current.country,
-      bio: bio !== undefined ? bio.trim() : current.bio
+      bio: bio !== undefined ? bio.trim() : current.bio,
+      avatarUrl: avatarUrl !== undefined ? avatarUrl : current.avatarUrl
     };
 
     dbPlayers[playerIndex] = updated;
 
-    res.json({ player: updated });
+    const { password: _, ...safePlayer } = updated;
+    res.json({ player: safePlayer });
   });
 
   // GET all submissions
@@ -483,6 +548,245 @@ async function startServer() {
       rejectedSubmissions,
       totalXpAwarded
     });
+  });
+
+  // --- ADMIN AUTH & CLEARANCE MANAGEMENT ROUTES ---
+
+  // GET Admin System Status (whether first admin bootstrap is open or closed)
+  app.get('/api/admin/status', (req: Request, res: Response) => {
+    res.json({
+      hasInitialAdmin: dbAdmins.length > 0,
+      totalAdmins: dbAdmins.length,
+      pendingRequestsCount: dbAdminRequests.filter(r => r.status === 'pending').length
+    });
+  });
+
+  // POST Bootstrap first Head of Command (only open when 0 admins exist)
+  app.post('/api/admin/bootstrap', (req: Request, res: Response) => {
+    if (dbAdmins.length > 0) {
+      return res.status(403).json({
+        error: 'Initial Head of Command has already been provisioned. New admin applicants must submit a clearance request for review.'
+      });
+    }
+
+    const { username, email, password, displayName } = req.body;
+    if (!username || !password || !displayName) {
+      return res.status(400).json({ error: 'Username, display name, and password are required' });
+    }
+
+    const firstAdmin: AdminUser = {
+      id: `admin-${Date.now()}`,
+      username: username.trim(),
+      email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+      displayName: displayName.trim(),
+      password: String(password),
+      role: 'HEAD_OF_COMMAND',
+      isHeadOfCommand: true,
+      createdAt: new Date().toISOString()
+    };
+
+    dbAdmins.push(firstAdmin);
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'HEAD_OF_COMMAND_PROVISIONED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Head of Command clearance assigned to ${displayName} (${username}). Admin direct registration is now permanently locked.`
+    };
+    dbAuditLogs.unshift(log);
+
+    const { password: _, ...safeAdmin } = firstAdmin;
+    res.status(201).json({
+      message: 'Head of Command profile initialized successfully.',
+      admin: safeAdmin,
+      auditLog: log
+    });
+  });
+
+  // POST Request Admin Access (used by applicants once initial admin exists)
+  app.post('/api/admin/request-access', (req: Request, res: Response) => {
+    const { username, email, password, displayName, reason } = req.body;
+
+    if (!username || !password || !displayName) {
+      return res.status(400).json({ error: 'Missing required credentials' });
+    }
+
+    // Check if already an admin
+    if (dbAdmins.some(a => a.username.toLowerCase() === username.trim().toLowerCase())) {
+      return res.status(409).json({ error: 'An admin account with this username already exists' });
+    }
+
+    // Check if already has a pending request
+    if (dbAdminRequests.some(r => r.username.toLowerCase() === username.trim().toLowerCase() && r.status === 'pending')) {
+      return res.status(409).json({ error: 'A clearance request for this username is already pending review' });
+    }
+
+    const newRequest: AdminRequest = {
+      id: `req-${Date.now()}`,
+      username: username.trim(),
+      email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+      displayName: displayName.trim(),
+      password: String(password),
+      reason: reason ? reason.trim() : 'Competitive staff supervisor & telemetry audit officer application.',
+      status: 'pending',
+      requestedAt: new Date().toISOString()
+    };
+
+    dbAdminRequests.unshift(newRequest);
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ADMIN_CLEARANCE_REQUESTED',
+      timestamp: new Date().toISOString(),
+      actorType: 'system',
+      details: `Staff clearance application submitted by ${displayName} (@${username}). Pending Head of Command review.`
+    };
+    dbAuditLogs.unshift(log);
+
+    res.status(201).json({
+      message: 'Clearance application submitted. Awaiting Head of Command approval.',
+      request: {
+        id: newRequest.id,
+        username: newRequest.username,
+        displayName: newRequest.displayName,
+        status: newRequest.status,
+        requestedAt: newRequest.requestedAt
+      }
+    });
+  });
+
+  // POST Admin Login
+  app.post('/api/admin/login', (req: Request, res: Response) => {
+    const { identifier, password } = req.body;
+
+    if (!identifier || !password) {
+      return res.status(400).json({ error: 'Username/Email and password are required' });
+    }
+
+    const clean = identifier.trim().toLowerCase();
+    const admin = dbAdmins.find(
+      a => a.username.toLowerCase() === clean || a.email.toLowerCase() === clean
+    );
+
+    if (!admin) {
+      // Check if user has a pending request to provide clear feedback
+      const pending = dbAdminRequests.find(
+        r => r.username.toLowerCase() === clean || r.email.toLowerCase() === clean
+      );
+      if (pending && pending.status === 'pending') {
+        return res.status(403).json({
+          error: 'Your staff clearance request is currently PENDING approval by the Head of Command.'
+        });
+      }
+      if (pending && pending.status === 'rejected') {
+        return res.status(403).json({
+          error: 'Your staff clearance request was rejected by administration.'
+        });
+      }
+      return res.status(404).json({ error: 'No authorized staff account found with provided credentials' });
+    }
+
+    if (admin.password && admin.password !== String(password)) {
+      return res.status(401).json({ error: 'Invalid security clearance passkey' });
+    }
+
+    const { password: _, ...safeAdmin } = admin;
+    res.json({
+      admin: safeAdmin,
+      message: 'Staff clearance validated. Welcome to Command Console.'
+    });
+  });
+
+  // GET all admin clearance requests
+  app.get('/api/admin/requests', (req: Request, res: Response) => {
+    const safeRequests = dbAdminRequests.map(({ password: _, ...reqWithoutPass }) => reqWithoutPass);
+    res.json({ requests: safeRequests });
+  });
+
+  // POST approve admin clearance request
+  app.post('/api/admin/requests/:id/approve', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const reqIndex = dbAdminRequests.findIndex(r => r.id === id);
+
+    if (reqIndex === -1) {
+      return res.status(404).json({ error: 'Clearance request not found' });
+    }
+
+    const targetReq = dbAdminRequests[reqIndex];
+    if (targetReq.status === 'approved') {
+      return res.status(400).json({ error: 'Request is already approved' });
+    }
+
+    targetReq.status = 'approved';
+    targetReq.reviewedAt = new Date().toISOString();
+    targetReq.reviewedBy = 'Head of Command';
+
+    // Add to active admins
+    const newAdmin: AdminUser = {
+      id: `admin-${Date.now()}`,
+      username: targetReq.username,
+      email: targetReq.email,
+      displayName: targetReq.displayName,
+      password: targetReq.password,
+      role: 'STAFF_OFFICER',
+      isHeadOfCommand: false,
+      createdAt: new Date().toISOString()
+    };
+
+    dbAdmins.push(newAdmin);
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ADMIN_CLEARANCE_APPROVED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Staff clearance approved for ${targetReq.displayName} (@${targetReq.username}). Officer role granted.`
+    };
+    dbAuditLogs.unshift(log);
+
+    res.json({
+      message: `Staff clearance approved for ${targetReq.displayName}`,
+      request: targetReq,
+      newAdmin: {
+        id: newAdmin.id,
+        username: newAdmin.username,
+        displayName: newAdmin.displayName,
+        role: newAdmin.role
+      }
+    });
+  });
+
+  // POST reject admin clearance request
+  app.post('/api/admin/requests/:id/reject', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const reqIndex = dbAdminRequests.findIndex(r => r.id === id);
+
+    if (reqIndex === -1) {
+      return res.status(404).json({ error: 'Clearance request not found' });
+    }
+
+    const targetReq = dbAdminRequests[reqIndex];
+    targetReq.status = 'rejected';
+    targetReq.reviewedAt = new Date().toISOString();
+    targetReq.reviewedBy = 'Head of Command';
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ADMIN_CLEARANCE_REJECTED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Staff clearance rejected for ${targetReq.displayName} (@${targetReq.username}).`
+    };
+    dbAuditLogs.unshift(log);
+
+    res.json({ message: 'Request rejected', request: targetReq });
+  });
+
+  // GET list of all admins
+  app.get('/api/admin/list', (req: Request, res: Response) => {
+    const safeAdmins = dbAdmins.map(({ password: _, ...a }) => a);
+    res.json({ admins: safeAdmins });
   });
 
   // --- VITE MIDDLEWARE & STATIC SERVING ---
