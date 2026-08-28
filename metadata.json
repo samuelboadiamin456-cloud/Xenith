@@ -1,0 +1,6 @@
+{
+  "name": "XN Academy",
+  "description": "Official competitive player network, rank tracking, and verified performance SITREP submissions for XN Academy.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
