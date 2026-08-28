@@ -11,7 +11,10 @@ import {
   Award, 
   Sparkles,
   ExternalLink,
-  ChevronRight
+  ChevronRight,
+  Download,
+  Smartphone,
+  CheckCircle
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { RankHexBadge } from '../components/RankHexBadge';
@@ -23,7 +26,9 @@ export const HomeView: React.FC = () => {
     currentPlayer, 
     setActiveView, 
     viewPlayerProfile, 
-    triggerRankCelebration 
+    triggerRankCelebration,
+    openInstallModal,
+    isAppInstalled
   } = useApp();
 
   const topPlayers = [...players].sort((a, b) => b.totalXp - a.totalXp).slice(0, 3);
@@ -366,6 +371,34 @@ export const HomeView: React.FC = () => {
             <p className="font-body text-xs text-slate-400 leading-relaxed">
               Ascend from E-Rank Cadet to S-MAX Supreme Vanguard, unlocking elite multipliers and hall of fame honors.
             </p>
+          </div>
+        </div>
+      </section>
+
+      {/* PWA Direct Installation Promo Card */}
+      <section className="relative rounded-2xl bg-gradient-to-r from-cyan-950/40 via-slate-900/90 to-[#0c1219] border border-cyan-500/30 p-6 sm:p-8 overflow-hidden shadow-[0_0_30px_rgba(56,189,248,0.1)]">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="space-y-2 text-center md:text-left">
+            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 text-[10px] font-mono font-bold uppercase tracking-wider">
+              <Smartphone className="w-3 h-3" />
+              PROGRESSIVE WEB APP
+            </div>
+            <h3 className="font-display text-xl sm:text-2xl font-black text-white uppercase tracking-tight">
+              Install XN Network to Your Device
+            </h3>
+            <p className="font-body text-xs sm:text-sm text-slate-300 max-w-xl">
+              Add the official XN Academy Web App to your phone homescreen or desktop for instant full-screen HUD access, offline caching, and lightning-fast SITREP submissions.
+            </p>
+          </div>
+
+          <div className="shrink-0">
+            <button
+              onClick={openInstallModal}
+              className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-sky-500 hover:from-cyan-400 hover:to-sky-400 text-slate-950 font-display font-black text-xs uppercase tracking-wider rounded-xl shadow-[0_0_20px_rgba(56,189,248,0.35)] flex items-center gap-2 transition-all cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              {isAppInstalled ? 'APP INSTALLED' : 'ADD TO HOMESCREEN'}
+            </button>
           </div>
         </div>
       </section>

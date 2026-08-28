@@ -15,7 +15,9 @@ import {
   X,
   Sparkles,
   Crown,
-  Camera
+  Camera,
+  Download,
+  Smartphone
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { RankHexBadge } from './RankHexBadge';
@@ -33,7 +35,9 @@ export const Navbar: React.FC = () => {
     submissions,
     triggerRankCelebration,
     openAuthModal,
-    adminRequests
+    adminRequests,
+    openInstallModal,
+    isAppInstalled
   } = useApp();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -162,6 +166,16 @@ export const Navbar: React.FC = () => {
 
         {/* Right Section: Identity Chip & Switcher */}
         <div className="flex items-center gap-3">
+          {/* Install App Quick Trigger */}
+          <button
+            onClick={openInstallModal}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/40 text-slate-300 hover:text-cyan-400 font-mono text-[11px] font-bold transition-all cursor-pointer"
+            title="Install XN Network to Homescreen"
+          >
+            <Download className="w-3.5 h-3.5 text-cyan-400" />
+            <span>{isAppInstalled ? 'Installed' : 'Install'}</span>
+          </button>
+
           {isAdmin && currentAdmin ? (
             /* ADMIN PROFILE CHIP */
             <div className="relative">
@@ -396,6 +410,19 @@ export const Navbar: React.FC = () => {
             }`}
           >
             Admin Portal ({pendingCount} pending)
+          </button>
+          <button
+            onClick={() => {
+              setMobileMenuOpen(false);
+              openInstallModal();
+            }}
+            className="w-full text-left px-3 py-2.5 rounded font-mono text-xs font-bold uppercase tracking-wider text-cyan-400 bg-cyan-950/30 border border-cyan-500/30 flex items-center justify-between"
+          >
+            <span className="flex items-center gap-2">
+              <Download className="w-3.5 h-3.5" />
+              {isAppInstalled ? 'App Installed' : 'Install App to Device'}
+            </span>
+            <span className="text-[10px] text-cyan-300 font-mono">PWA</span>
           </button>
         </div>
       )}

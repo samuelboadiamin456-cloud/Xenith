@@ -35,6 +35,15 @@ interface AppContextType {
   openAuthModal: (mode?: 'login' | 'register' | 'admin-login' | 'admin-register') => void;
   closeAuthModal: () => void;
   
+  // PWA Homescreen Installation
+  installModalOpen: boolean;
+  isInstallable: boolean;
+  isAppInstalled: boolean;
+  deferredPrompt: any;
+  openInstallModal: () => void;
+  closeInstallModal: () => void;
+  promptInstall: () => Promise<boolean>;
+  
   // Navigation
   setActiveView: (view: ActiveView) => void;
   viewPlayerProfile: (xnId: string) => void;
@@ -165,6 +174,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'admin-login' | 'admin-register'>('register');
+
+  // PWA State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState<boolean>(false);
+  const [installModalOpen, setInstallModalOpen] = useState<boolean>(false);
+  const [isAppInstalled, setIsAppInstalled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as unknown as { standalone?: boolean }).standalone === true
+    );
+  });
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+
+    const handleAppInstalled = () => {
+      setIsAppInstalled(true);
+      setIsInstallable(false);
+      setDeferredPrompt(null);
+      showToast('XN Academy app successfully installed to your homescreen!', 'success');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const openInstallModal = () => {
+    setInstallModalOpen(true);
+  };
+
+  const closeInstallModal = () => {
+    setInstallModalOpen(false);
+  };
+
+  const promptInstall = async (): Promise<boolean> => {
+    if (!deferredPrompt) {
+      openInstallModal();
+      return false;
+    }
+    try {
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice.outcome === 'accepted') {
+        setIsAppInstalled(true);
+        setIsInstallable(false);
+        setDeferredPrompt(null);
+        return true;
+      }
+    } catch (err) {
+      console.error('PWA prompt error:', err);
+    }
+    return false;
+  };
 
   const openAuthModal = (mode: 'login' | 'register' | 'admin-login' | 'admin-register' = 'register') => {
     setAuthModalMode(mode);
@@ -769,6 +841,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         authModalMode,
         openAuthModal,
         closeAuthModal,
+        installModalOpen,
+        isInstallable,
+        isAppInstalled,
+        deferredPrompt,
+        openInstallModal,
+        closeInstallModal,
+        promptInstall,
         setActiveView,
         viewPlayerProfile,
         loginAsPlayer,

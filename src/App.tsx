@@ -10,7 +10,8 @@ import { PublicProfileView } from './views/PublicProfileView';
 import { EditProfileView } from './views/EditProfileView';
 import { RankJourneyModal } from './components/RankJourneyModal';
 import { AuthModal } from './views/AuthModal';
-import { Shield, Sparkles, CheckCircle2, AlertCircle, Info } from 'lucide-react';
+import { InstallAppModal } from './components/InstallAppModal';
+import { Shield, Sparkles, CheckCircle2, AlertCircle, Info, Download, Smartphone } from 'lucide-react';
 
 const AppContent: React.FC = () => {
   const { 
@@ -22,7 +23,13 @@ const AppContent: React.FC = () => {
     currentPlayer,
     authModalOpen,
     authModalMode,
-    closeAuthModal
+    closeAuthModal,
+    installModalOpen,
+    closeInstallModal,
+    openInstallModal,
+    deferredPrompt,
+    isAppInstalled,
+    showToast
   } = useApp();
 
   const renderView = () => {
@@ -81,6 +88,16 @@ const AppContent: React.FC = () => {
         initialMode={authModalMode}
       />
 
+      {/* Global PWA Install Modal */}
+      <InstallAppModal
+        isOpen={installModalOpen}
+        onClose={closeInstallModal}
+        deferredPrompt={deferredPrompt}
+        onInstallSuccess={() => {
+          showToast('XN Academy installed successfully!', 'success');
+        }}
+      />
+
       {/* Toast Notification Alert */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
@@ -122,6 +139,14 @@ const AppContent: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-4 text-[11px]">
+            <button
+              onClick={openInstallModal}
+              className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-cyan-500/40 text-cyan-400 hover:text-cyan-300 flex items-center gap-1.5 transition-all cursor-pointer shadow-[0_0_10px_rgba(56,189,248,0.15)]"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              {isAppInstalled ? 'App Installed' : 'Install App to Device'}
+            </button>
+            <span className="text-slate-700">|</span>
             <span>SYSTEM ENCRYPTION: SHA-256</span>
             <span className="text-slate-700">|</span>
             <span className="text-cyan-400">APEX VANGUARD SEASON</span>
