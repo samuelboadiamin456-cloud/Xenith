@@ -83,6 +83,13 @@ interface AppContextType {
   approveAdminRequest: (requestId: string) => Promise<void>;
   rejectAdminRequest: (requestId: string) => Promise<void>;
   refreshAdminData: () => Promise<void>;
+  refreshPlayers: () => Promise<void>;
+
+  // Head of Command & Admin Powers
+  resetAllRanks: (reason?: string) => Promise<void>;
+  resetPlayerRank: (xnId: string, reason?: string) => Promise<void>;
+  deductXp: (xnId: string, amount: number, reason?: string) => Promise<void>;
+  rewardPlayer: (xnId: string, amount?: number, reason?: string) => Promise<void>;
   
   // Submissions
   createSubmission: (stats: SubmissionStats, evidenceUrl?: string) => Promise<Submission>;
@@ -501,6 +508,97 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const refreshPlayers = async () => {
+    try {
+      const serverPlayers = await api.getPlayers();
+      if (serverPlayers && serverPlayers.length > 0) {
+        setPlayers(serverPlayers);
+      }
+    } catch (err) {
+      console.warn('[Refresh Players]', err);
+    }
+  };
+
+  // Head of Command: Reset ALL Operative Ranks across network
+  const resetAllRanks = async (reason?: string) => {
+    try {
+      const res = await api.resetAllRanks(currentAdmin?.username, reason);
+      setPlayers(prev => prev.map(p => ({
+        ...p,
+        totalXp: 0,
+        currentRank: 'E'
+      })));
+      if (currentPlayer) {
+        setCurrentPlayer(prev => prev ? { ...prev, totalXp: 0, currentRank: 'E' } : null);
+      }
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      showToast(res.message || 'All operative ranks successfully reset to Rank E (0 XP).', 'success');
+      await refreshPlayers();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to reset all ranks', 'error');
+      throw err;
+    }
+  };
+
+  // Head of Command: Reset Individual Operative Rank
+  const resetPlayerRank = async (xnId: string, reason?: string) => {
+    try {
+      const res = await api.resetPlayerRank(xnId, currentAdmin?.username, reason);
+      setPlayers(prev => prev.map(p => p.xnId.toLowerCase() === xnId.toLowerCase() ? res.player : p));
+      if (currentPlayer?.xnId.toLowerCase() === xnId.toLowerCase()) {
+        setCurrentPlayer(res.player);
+      }
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      showToast(res.message || `Operative ${xnId} rank reset to Rank E (0 XP).`, 'success');
+      await refreshPlayers();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to reset player rank', 'error');
+      throw err;
+    }
+  };
+
+  // Head of Command: Deduct XP from Operative
+  const deductXp = async (xnId: string, amount: number, reason?: string) => {
+    try {
+      const res = await api.deductXp(xnId, amount, currentAdmin?.username, reason);
+      setPlayers(prev => prev.map(p => p.xnId.toLowerCase() === xnId.toLowerCase() ? res.player : p));
+      if (currentPlayer?.xnId.toLowerCase() === xnId.toLowerCase()) {
+        setCurrentPlayer(res.player);
+      }
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      showToast(res.message || `Deducted ${amount} XP from ${xnId}.`, 'success');
+      await refreshPlayers();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to deduct XP', 'error');
+      throw err;
+    }
+  };
+
+  // Admin Reward (+50 XP) - Unlocked for Admins crossing A-Rank or HoC
+  const rewardPlayer = async (xnId: string, amount: number = 50, reason?: string) => {
+    try {
+      const res = await api.rewardPlayer(xnId, currentAdmin?.username || 'Command', amount, reason);
+      setPlayers(prev => prev.map(p => p.xnId.toLowerCase() === xnId.toLowerCase() ? res.player : p));
+      if (currentPlayer?.xnId.toLowerCase() === xnId.toLowerCase()) {
+        setCurrentPlayer(res.player);
+      }
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      showToast(res.message || `Awarded +${amount} XP reward to ${xnId}!`, 'success');
+      await refreshPlayers();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to reward operative', 'error');
+      throw err;
+    }
+  };
+
   const logout = () => {
     setCurrentPlayer(null);
     setCurrentAdmin(null);
@@ -858,6 +956,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         approveAdminRequest,
         rejectAdminRequest,
         refreshAdminData,
+        refreshPlayers,
+        resetAllRanks,
+        resetPlayerRank,
+        deductXp,
+        rewardPlayer,
         logout,
         registerPlayer,
         updateProfile,

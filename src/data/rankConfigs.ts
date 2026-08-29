@@ -5,10 +5,10 @@ export const RANK_CONFIGS: Record<RankTier, RankConfig> = {
     tier: 'E',
     title: 'E-RANK RECRUIT',
     minXp: 0,
-    maxXp: 200,
-    clearanceLevel: 'LEVEL 1',
+    maxXp: 999,
+    clearanceLevel: 'LEVEL 1 RECRUIT',
     multiplier: '1.0x',
-    perkDescription: 'STANDARD DRILLS UNLOCKED',
+    perkDescription: 'STANDARD DRILLS & TELEMETRY LOGGING',
     badgeColor: '#64748b',
     glowColor: 'rgba(100, 116, 139, 0.4)',
     themeColor: '#94a3b8'
@@ -16,11 +16,11 @@ export const RANK_CONFIGS: Record<RankTier, RankConfig> = {
   'D': {
     tier: 'D',
     title: 'D-RANK CADET',
-    minXp: 200,
-    maxXp: 450,
-    clearanceLevel: 'LEVEL 2',
+    minXp: 1000,
+    maxXp: 1999,
+    clearanceLevel: 'LEVEL 2 CADET',
     multiplier: '1.1x',
-    perkDescription: 'TACTICAL SQUADS AUTHORIZED',
+    perkDescription: 'TACTICAL SQUADS & VERIFIED BADGE',
     badgeColor: '#38bdf8',
     glowColor: 'rgba(56, 189, 248, 0.4)',
     themeColor: '#38bdf8'
@@ -28,35 +28,35 @@ export const RANK_CONFIGS: Record<RankTier, RankConfig> = {
   'C': {
     tier: 'C',
     title: 'C-RANK OPERATIVE',
-    minXp: 450,
-    maxXp: 700,
-    clearanceLevel: 'LEVEL 3',
+    minXp: 2000,
+    maxXp: 3099,
+    clearanceLevel: 'LEVEL 3 OPERATIVE',
     multiplier: '1.25x',
-    perkDescription: 'CLASSIFIED MISSIONS PERMITTED',
-    badgeColor: '#0ea5e9',
-    glowColor: 'rgba(14, 165, 233, 0.5)',
-    themeColor: '#0284c7'
+    perkDescription: 'CLASSIFIED MISSIONS & SQUAD RECRUITMENT',
+    badgeColor: '#4ade80',
+    glowColor: 'rgba(74, 222, 128, 0.4)',
+    themeColor: '#16a34a'
   },
   'B': {
     tier: 'B',
     title: 'B-RANK VETERAN',
-    minXp: 700,
-    maxXp: 1000,
-    clearanceLevel: 'LEVEL 4',
-    multiplier: '1.5x',
-    perkDescription: 'ELITE CONTRACTS AVAILABLE',
-    badgeColor: '#0284c7',
-    glowColor: 'rgba(2, 132, 199, 0.6)',
-    themeColor: '#38bdf8'
+    minXp: 3100,
+    maxXp: 4999,
+    clearanceLevel: 'LEVEL 4 VETERAN',
+    multiplier: '1.4x',
+    perkDescription: 'ELITE CONTRACTS & BRACKET ELIGIBILITY',
+    badgeColor: '#0ea5e9',
+    glowColor: 'rgba(14, 165, 233, 0.5)',
+    themeColor: '#0284c7'
   },
   'A': {
     tier: 'A',
     title: 'A-RANK SPECIALIST',
-    minXp: 1000,
-    maxXp: 1500,
-    clearanceLevel: 'LEVEL 5',
-    multiplier: '1.8x',
-    perkDescription: 'HIGH-PRIORITY SITREP CLEARANCE',
+    minXp: 5000,
+    maxXp: 9999,
+    clearanceLevel: 'LEVEL 5 SPECIALIST',
+    multiplier: '1.6x',
+    perkDescription: 'ADMIN REWARD POWER (+50 XP) & HIGH-PRIORITY CLEARANCE',
     badgeColor: '#f59e0b',
     glowColor: 'rgba(245, 158, 11, 0.5)',
     themeColor: '#fbbf24'
@@ -64,43 +64,45 @@ export const RANK_CONFIGS: Record<RankTier, RankConfig> = {
   'S': {
     tier: 'S',
     title: 'S-RANK ASCENDANT',
-    minXp: 1500,
-    maxXp: 2200,
-    clearanceLevel: 'LEVEL 6',
-    multiplier: '2.2x',
-    perkDescription: 'VANGUARD INVITATIONAL ACCESS',
-    badgeColor: '#ef4444',
-    glowColor: 'rgba(239, 68, 68, 0.6)',
-    themeColor: '#f87171'
+    minXp: 10000,
+    maxXp: 15999,
+    clearanceLevel: 'LEVEL 6 ASCENDANT',
+    multiplier: '1.85x',
+    perkDescription: 'VANGUARD INVITATIONAL & HALL OF FAME NOMINEE',
+    badgeColor: '#f97316',
+    glowColor: 'rgba(249, 115, 22, 0.6)',
+    themeColor: '#ea580c'
   },
   'S-MAX': {
     tier: 'S-MAX',
     title: 'S-MAX SUPREME VANGUARD',
-    minXp: 2200,
-    maxXp: 3000,
-    clearanceLevel: 'APEX LEVEL',
-    multiplier: '3.0x',
-    perkDescription: 'HALL OF FAME PERMANENT SEAT',
-    badgeColor: '#ec4899',
-    glowColor: 'rgba(236, 72, 153, 0.7)',
-    themeColor: '#f472b6'
+    minXp: 16000,
+    maxXp: 25000,
+    clearanceLevel: 'APEX VANGUARD',
+    multiplier: '2.5x',
+    perkDescription: 'HALL OF FAME PERMANENT SEAT & SUPREME EMBLEM',
+    badgeColor: '#ef4444',
+    glowColor: 'rgba(239, 68, 68, 0.7)',
+    themeColor: '#dc2626'
   }
 };
 
 export const RANK_TIERS_ORDER: RankTier[] = ['E', 'D', 'C', 'B', 'A', 'S', 'S-MAX'];
 
 export function calculateRank(xp: number): RankTier {
-  if (xp >= 2200) return 'S-MAX';
-  if (xp >= 1500) return 'S';
-  if (xp >= 1000) return 'A';
-  if (xp >= 700) return 'B';
-  if (xp >= 450) return 'C';
-  if (xp >= 200) return 'D';
+  const cleanXp = Math.max(0, Math.floor(Number(xp) || 0));
+  if (cleanXp >= 16000) return 'S-MAX';
+  if (cleanXp >= 10000) return 'S';
+  if (cleanXp >= 5000) return 'A';
+  if (cleanXp >= 3100) return 'B';
+  if (cleanXp >= 2000) return 'C';
+  if (cleanXp >= 1000) return 'D';
   return 'E';
 }
 
 export function getRankProgress(xp: number): RankProgress {
-  const currentTier = calculateRank(xp);
+  const cleanXp = Math.max(0, Math.floor(Number(xp) || 0));
+  const currentTier = calculateRank(cleanXp);
   const currentIndex = RANK_TIERS_ORDER.indexOf(currentTier);
   const currentConfig = RANK_CONFIGS[currentTier];
 
@@ -109,8 +111,8 @@ export function getRankProgress(xp: number): RankProgress {
     return {
       currentTier,
       nextTier: null,
-      currentXp: xp,
-      targetXp: currentConfig.maxXp,
+      currentXp: cleanXp,
+      targetXp: currentConfig.minXp,
       percent: 100,
       remainingXp: 0
     };
@@ -120,15 +122,15 @@ export function getRankProgress(xp: number): RankProgress {
   const nextConfig = RANK_CONFIGS[nextTier];
   const tierMin = currentConfig.minXp;
   const tierTarget = nextConfig.minXp;
-  const progressInTier = Math.max(0, xp - tierMin);
+  const progressInTier = Math.max(0, cleanXp - tierMin);
   const totalTierDistance = tierTarget - tierMin;
-  const percent = Math.min(100, Math.round((progressInTier / totalTierDistance) * 100));
-  const remainingXp = Math.max(0, tierTarget - xp);
+  const percent = Math.min(100, Math.max(0, Math.round((progressInTier / totalTierDistance) * 100)));
+  const remainingXp = Math.max(0, tierTarget - cleanXp);
 
   return {
     currentTier,
     nextTier,
-    currentXp: xp,
+    currentXp: cleanXp,
     targetXp: tierTarget,
     percent,
     remainingXp
@@ -143,10 +145,10 @@ export function calculateSubmissionScore(stats: {
   winRate: number;
   hs: number;
 }) {
-  const killsXp = stats.kills * 5;
-  const winBonus = stats.wins * 25;
-  const kdBonus = Math.round(stats.kd * 15);
-  const hsBonus = Math.round(stats.hs * 0.5);
+  const killsXp = Math.max(0, Math.round(Number(stats.kills) || 0)) * 5;
+  const winBonus = Math.max(0, Math.round(Number(stats.wins) || 0)) * 25;
+  const kdBonus = Math.round((Number(stats.kd) || 0) * 15);
+  const hsBonus = Math.round((Number(stats.hs) || 0) * 0.5);
   const total = killsXp + winBonus + kdBonus + hsBonus;
 
   return {

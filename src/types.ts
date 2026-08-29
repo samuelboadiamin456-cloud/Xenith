@@ -59,6 +59,7 @@ export interface AdminUser {
   displayName: string;
   role: 'HEAD_OF_COMMAND' | 'STAFF_OFFICER';
   isHeadOfCommand: boolean;
+  linkedXnId?: string;
   createdAt: string;
 }
 
@@ -112,7 +113,7 @@ export interface AuditLog {
   id: string;
   action: string;
   timestamp: string;
-  actorType: 'admin' | 'system';
+  actorType: 'admin' | 'system' | 'hoc';
   details: string;
 }
 

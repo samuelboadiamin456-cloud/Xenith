@@ -1,9 +1,9 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
-import bcrypt from 'bcryptjs';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { pool, initSchema } from './db.js';
 
+// Interfaces matching frontend types
 export type RankTier = 'E' | 'D' | 'C' | 'B' | 'A' | 'S' | 'S-MAX';
 
 export interface LifetimeStats {
@@ -11,7 +11,7 @@ export interface LifetimeStats {
   wins: number;
   matches: number;
   kd: number;
-  winRate: number;
+  winRate: number; // Cumulative win rate %
   hs: number;
 }
 
@@ -26,6 +26,7 @@ export interface Player {
   country?: string;
   bio?: string;
   avatarUrl?: string;
+  password?: string;
   currentRank: RankTier;
   peakRank: RankTier;
   totalXp: number;
@@ -35,525 +36,1061 @@ export interface Player {
   lifetimeStats: LifetimeStats;
 }
 
-function rowToPlayer(r: any): Player {
-  return {
-    id: r.id,
-    xnId: r.xn_id,
-    username: r.username,
-    email: r.email,
-    displayName: r.display_name,
-    ign: r.ign,
-    role: r.role,
-    country: r.country ?? undefined,
-    bio: r.bio ?? undefined,
-    avatarUrl: r.avatar_url ?? undefined,
-    currentRank: r.current_rank,
-    peakRank: r.peak_rank,
-    totalXp: r.total_xp,
-    academyStatus: r.academy_status,
-    verificationStatus: r.verification_status,
-    joinedAt: r.joined_at instanceof Date ? r.joined_at.toISOString() : r.joined_at,
-    lifetimeStats: r.lifetime_stats,
-  };
-}
-function rowToSubmission(r: any) {
-  return {
-    id: r.id,
-    xnId: r.xn_id,
-    playerName: r.player_name,
-    playerIgn: r.player_ign,
-    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
-    status: r.status,
-    stats: r.stats,
-    evidenceUrl: r.evidence_url ?? undefined,
-    fraudFlags: r.fraud_flags,
-    scoreBreakdown: r.score_breakdown,
-    rejectionReason: r.rejection_reason ?? undefined,
-    reviewedBy: r.reviewed_by ?? undefined,
-    reviewedAt: r.reviewed_at ? (r.reviewed_at instanceof Date ? r.reviewed_at.toISOString() : r.reviewed_at) : undefined,
-  };
-}
-function rowToLog(r: any) {
-  return {
-    id: r.id,
-    action: r.action,
-    timestamp: r.timestamp instanceof Date ? r.timestamp.toISOString() : r.timestamp,
-    actorType: r.actor_type,
-    details: r.details,
-  };
-}
-function rowToSafeAdmin(r: any) {
-  return {
-    id: r.id,
-    username: r.username,
-    email: r.email,
-    displayName: r.display_name,
-    role: r.role,
-    isHeadOfCommand: r.is_head_of_command,
-    createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
-  };
-}
-function rowToSafeRequest(r: any) {
-  return {
-    id: r.id,
-    username: r.username,
-    email: r.email,
-    displayName: r.display_name,
-    reason: r.reason,
-    status: r.status,
-    requestedAt: r.requested_at instanceof Date ? r.requested_at.toISOString() : r.requested_at,
-    reviewedAt: r.reviewed_at ? (r.reviewed_at instanceof Date ? r.reviewed_at.toISOString() : r.reviewed_at) : undefined,
-    reviewedBy: r.reviewed_by ?? undefined,
-  };
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string;
+  displayName: string;
+  password?: string;
+  role: 'HEAD_OF_COMMAND' | 'STAFF_OFFICER';
+  isHeadOfCommand: boolean;
+  linkedXnId?: string;
+  createdAt: string;
 }
 
+export interface AdminRequest {
+  id: string;
+  username: string;
+  email: string;
+  displayName: string;
+  password?: string;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+}
+
+export interface SubmissionStats {
+  kills: number;
+  wins: number;
+  matches: number;
+  kd: number;
+  winRate: number;
+  hs: number;
+}
+
+export interface ScoreBreakdown {
+  killsXp: number;
+  winBonus: number;
+  kdBonus: number;
+  hsBonus: number;
+  total: number;
+}
+
+export interface Submission {
+  id: string;
+  xnId: string;
+  playerName: string;
+  playerIgn: string;
+  createdAt: string;
+  status: 'pending' | 'approved' | 'rejected' | 'flagged';
+  stats: SubmissionStats;
+  evidenceUrl?: string;
+  fraudFlags: string[];
+  scoreBreakdown: ScoreBreakdown;
+  rejectionReason?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+}
+
+export interface AuditLog {
+  id: string;
+  action: string;
+  timestamp: string;
+  actorType: 'admin' | 'system' | 'hoc';
+  details: string;
+}
+
+// Data Directory and Persistent Storage File
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DB_FILE = path.join(DATA_DIR, 'db.json');
+
+// Ensure data directory exists
+if (!fs.existsSync(DATA_DIR)) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (err) {
+    console.error('Failed to create data directory:', err);
+  }
+}
+
+// In-Memory Database Store
+let dbPlayers: Player[] = [];
+let dbSubmissions: Submission[] = [];
+let dbAuditLogs: AuditLog[] = [];
+let dbAdmins: AdminUser[] = [];
+let dbAdminRequests: AdminRequest[] = [];
+
+// Load Database from disk on startup
+function loadDatabase() {
+  try {
+    if (fs.existsSync(DB_FILE)) {
+      const raw = fs.readFileSync(DB_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.players)) dbPlayers = data.players;
+      if (Array.isArray(data.submissions)) dbSubmissions = data.submissions;
+      if (Array.isArray(data.auditLogs)) dbAuditLogs = data.auditLogs;
+      if (Array.isArray(data.admins)) dbAdmins = data.admins;
+      if (Array.isArray(data.adminRequests)) dbAdminRequests = data.adminRequests;
+      console.log(`[Storage] Database loaded from disk: ${dbPlayers.length} players, ${dbAdmins.length} admins.`);
+    }
+  } catch (err) {
+    console.error('[Storage] Error loading database from disk:', err);
+  }
+}
+
+// Save Database to disk safely
+function saveDatabase() {
+  try {
+    const data = {
+      players: dbPlayers,
+      submissions: dbSubmissions,
+      auditLogs: dbAuditLogs,
+      admins: dbAdmins,
+      adminRequests: dbAdminRequests,
+      lastSaved: new Date().toISOString()
+    };
+    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[Storage] Error saving database to disk:', err);
+  }
+}
+
+// Initialize persistence on module load
+loadDatabase();
+
+// Rank Tier XP System as defined by user specification:
+// 1000xp = D rank
+// 2000xp = C rank
+// 3100xp = B rank
+// 5000xp = A rank
+// 10000xp = S rank
+// 16000xp + = S max
 function calculateRank(xp: number): RankTier {
-  if (xp >= 2000) return 'S-MAX';
-  if (xp >= 1500) return 'S';
-  if (xp >= 1000) return 'A';
-  if (xp >= 700) return 'B';
-  if (xp >= 500) return 'C';
-  if (xp >= 300) return 'D';
+  const cleanXp = Math.max(0, Math.floor(Number(xp) || 0));
+  if (cleanXp >= 16000) return 'S-MAX';
+  if (cleanXp >= 10000) return 'S';
+  if (cleanXp >= 5000) return 'A';
+  if (cleanXp >= 3100) return 'B';
+  if (cleanXp >= 2000) return 'C';
+  if (cleanXp >= 1000) return 'D';
   return 'E';
 }
-const RANK_ORDER: RankTier[] = ['E', 'D', 'C', 'B', 'A', 'S', 'S-MAX'];
-function higherRank(a: RankTier, b: RankTier): RankTier {
-  return RANK_ORDER.indexOf(a) >= RANK_ORDER.indexOf(b) ? a : b;
-}
 
-function calculateSubmissionScore(stats: any) {
-  const killsXp = (stats.kills || 0) * 5;
-  const winBonus = (stats.wins || 0) * 25;
-  const kdBonus = Math.round(Math.min(stats.kd || 0, 15) * 15);
-  const hsBonus = Math.round((stats.hs || 0) * 0.5);
+function calculateSubmissionScore(stats: SubmissionStats): ScoreBreakdown {
+  const killsXp = Math.max(0, Math.round(Number(stats.kills) || 0)) * 5;
+  const winBonus = Math.max(0, Math.round(Number(stats.wins) || 0)) * 25;
+  const kdBonus = Math.round((Number(stats.kd) || 0) * 15);
+  const hsBonus = Math.round((Number(stats.hs) || 0) * 0.5);
   const total = killsXp + winBonus + kdBonus + hsBonus;
-  return { killsXp, winBonus, kdBonus, hsBonus, total };
-}
 
-async function nextXnId(): Promise<string> {
-  const { rows } = await pool.query('SELECT xn_id FROM players');
-  const nums = rows.map((r: any) => {
-    const m = String(r.xn_id).match(/XN-(\d+)/);
-    return m ? parseInt(m[1], 10) : 0;
-  });
-  const max = nums.length ? Math.max(0, ...nums) : 0;
-  return `XN-${(max + 1).toString().padStart(3, '0')}`;
-}
-
-async function logEvent(action: string, actorType: 'admin' | 'system', details: string) {
-  const id = `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-  await pool.query(
-    'INSERT INTO audit_logs (id, action, actor_type, details) VALUES ($1,$2,$3,$4)',
-    [id, action, actorType, details]
-  );
-  const { rows } = await pool.query('SELECT * FROM audit_logs WHERE id=$1', [id]);
-  return rowToLog(rows[0]);
-}
-
-// ---- admin session tokens ----
-// The app has no server-verifiable admin identity otherwise (the
-// frontend previously just trusted a value in localStorage), so every
-// mutating admin action below is gated behind one of these.
-import crypto from 'crypto';
-const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
-
-async function createAdminSession(adminId: string): Promise<string> {
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
-  await pool.query('INSERT INTO admin_sessions (token, admin_id, expires_at) VALUES ($1,$2,$3)', [token, adminId, expiresAt]);
-  return token;
-}
-
-async function requireAdmin(req: Request, res: Response, next: () => void) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing admin session token' });
-  const { rows } = await pool.query('SELECT * FROM admin_sessions WHERE token=$1', [token]);
-  const session = rows[0];
-  if (!session || new Date(session.expires_at).getTime() < Date.now()) {
-    return res.status(401).json({ error: 'Admin session is invalid or has expired. Please log in again.' });
-  }
-  (req as any).adminId = session.admin_id;
-  next();
+  return {
+    killsXp,
+    winBonus,
+    kdBonus,
+    hsBonus,
+    total
+  };
 }
 
 async function startServer() {
-  await initSchema();
-
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+  app.use(express.json({ limit: '15mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
+  // Request logger for API debugging
   app.use((req, res, next) => {
-    if (req.path.startsWith('/api')) console.log(`[API] ${req.method} ${req.path}`);
+    if (req.path.startsWith('/api')) {
+      console.log(`[API] ${req.method} ${req.path}`);
+    }
     next();
   });
 
-  app.get('/api/health', async (req: Request, res: Response) => {
-    try {
-      const p = await pool.query('SELECT COUNT(*)::int AS c FROM players');
-      const s = await pool.query('SELECT COUNT(*)::int AS c FROM submissions');
-      res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '2.0.0-db', totalPlayers: p.rows[0].c, totalSubmissions: s.rows[0].c });
-    } catch (e) {
-      res.status(500).json({ status: 'error', error: 'Database unreachable' });
-    }
+  // --- API ROUTES ---
+
+  // Health Check
+  app.get('/api/health', (req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      version: '2.0.0',
+      totalPlayers: dbPlayers.length,
+      totalSubmissions: dbSubmissions.length,
+      totalAdmins: dbAdmins.length
+    });
   });
 
-  app.get('/api/players', async (req: Request, res: Response) => {
+  // GET all players
+  app.get('/api/players', (req: Request, res: Response) => {
     const { role, rank, sort } = req.query;
-    const clauses: string[] = [];
-    const params: any[] = [];
-    if (role && role !== 'ALL') { params.push(role); clauses.push(`role = $${params.length}`); }
-    if (rank && rank !== 'ALL') { params.push(rank); clauses.push(`current_rank = $${params.length}`); }
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    let orderBy = 'total_xp DESC';
-    if (sort === 'kd') orderBy = "(lifetime_stats->>'kd')::float DESC";
-    else if (sort === 'wins') orderBy = "(lifetime_stats->>'wins')::float DESC";
-    else if (sort === 'winRate') orderBy = "(lifetime_stats->>'winRate')::float DESC";
-    const { rows } = await pool.query(`SELECT * FROM players ${where} ORDER BY ${orderBy}`, params);
-    const list = rows.map(rowToPlayer);
+    let list = [...dbPlayers];
+
+    if (role && role !== 'ALL') {
+      list = list.filter(p => p.role === role);
+    }
+    if (rank && rank !== 'ALL') {
+      list = list.filter(p => p.currentRank === rank);
+    }
+
+    if (sort === 'kd') {
+      list.sort((a, b) => (Number(b.lifetimeStats?.kd) || 0) - (Number(a.lifetimeStats?.kd) || 0));
+    } else if (sort === 'wins') {
+      list.sort((a, b) => (Number(b.lifetimeStats?.wins) || 0) - (Number(a.lifetimeStats?.wins) || 0));
+    } else if (sort === 'winRate') {
+      list.sort((a, b) => (Number(b.lifetimeStats?.winRate) || 0) - (Number(a.lifetimeStats?.winRate) || 0));
+    } else {
+      list.sort((a, b) => (b.totalXp ?? 0) - (a.totalXp ?? 0));
+    }
+
     res.json({ players: list, count: list.length });
   });
 
-  app.get('/api/players/:identifier', async (req: Request, res: Response) => {
-    const clean = req.params.identifier.toLowerCase();
-    const { rows } = await pool.query(
-      `SELECT * FROM players WHERE lower(xn_id)=$1 OR lower(id)=$1 OR lower(username)=$1 OR lower(ign)=$1`,
-      [clean]
+  // GET single player by ID, XN-ID, or username
+  app.get('/api/players/:identifier', (req: Request, res: Response) => {
+    const clean = req.params.identifier.toLowerCase().trim();
+    const player = dbPlayers.find(
+      p =>
+        (p.xnId && p.xnId.toLowerCase() === clean) ||
+        (p.id && p.id.toLowerCase() === clean) ||
+        (p.username && p.username.toLowerCase() === clean) ||
+        (p.ign && p.ign.toLowerCase() === clean)
     );
-    if (!rows.length) return res.status(404).json({ error: 'Player not found' });
-    res.json({ player: rowToPlayer(rows[0]) });
+
+    if (!player) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+    res.json({ player });
   });
 
-  app.post('/api/players/register', async (req: Request, res: Response) => {
+  // POST Register new player
+  app.post('/api/players/register', (req: Request, res: Response) => {
     const { username, email, password, displayName, ign, role, country, bio, avatarUrl } = req.body;
+
     if (!username || !displayName || !ign || !role) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
-    const existing = await pool.query('SELECT 1 FROM players WHERE lower(username)=$1', [String(username).trim().toLowerCase()]);
-    if (existing.rows.length) return res.status(409).json({ error: 'Username already registered' });
 
-    const xnId = await nextXnId();
-    const id = `p-${Date.now()}`;
-    const passwordHash = password ? await bcrypt.hash(String(password), 10) : null;
-    const lifetimeStats: LifetimeStats = { kills: 0, wins: 0, matches: 0, kd: 0, winRate: 0, hs: 0 };
-
-    await pool.query(
-      `INSERT INTO players (id, xn_id, username, email, display_name, ign, role, country, bio, avatar_url, password_hash, current_rank, peak_rank, total_xp, academy_status, verification_status, lifetime_stats)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'E','E',50,'Cadet','Verified',$12)`,
-      [
-        id, xnId, String(username).trim(),
-        email ? String(email).trim() : `${String(username).trim()}@xn-academy.gg`,
-        String(displayName).trim(), String(ign).trim().toUpperCase(), role,
-        country ? String(country).trim() : 'Global',
-        bio ? String(bio).trim() : 'Verified recruit of the XN Academy competitive network.',
-        avatarUrl || null, passwordHash, JSON.stringify(lifetimeStats),
-      ]
+    // Check for username collision
+    const existing = dbPlayers.find(
+      p => p.username.toLowerCase() === username.trim().toLowerCase()
     );
-
-    const { rows } = await pool.query('SELECT * FROM players WHERE id=$1', [id]);
-    const player = rowToPlayer(rows[0]);
-    const log = await logEvent('OPERATIVE_REGISTERED', 'system', `New account assigned official permanent identifier: ${xnId} (${player.displayName})`);
-    res.status(201).json({ player, auditLog: log });
-  });
-
-  app.post('/api/players/login', async (req: Request, res: Response) => {
-    const { identifier, password } = req.body;
-    if (!identifier) return res.status(400).json({ error: 'Identifier is required' });
-    const clean = String(identifier).trim().toLowerCase();
-    const { rows } = await pool.query(
-      `SELECT * FROM players WHERE lower(xn_id)=$1 OR lower(username)=$1 OR lower(email)=$1 OR lower(ign)=$1`,
-      [clean]
-    );
-    if (!rows.length) return res.status(404).json({ error: 'Operative not found with provided identifier' });
-    const row = rows[0];
-    if (row.password_hash && password !== undefined) {
-      const ok = await bcrypt.compare(String(password), row.password_hash);
-      if (!ok) return res.status(401).json({ error: 'Invalid operative clearance password' });
+    if (existing) {
+      return res.status(409).json({ error: 'Username already registered' });
     }
-    res.json({ player: rowToPlayer(row), message: 'Authentication successful' });
+
+    // Generate next unique sequential XN-ID
+    const existingNumbers = dbPlayers.map(p => {
+      const match = p.xnId.match(/XN-(\d+)/);
+      return match ? parseInt(match[1], 10) : 0;
+    });
+    const maxNumber = Math.max(0, ...existingNumbers);
+    const nextNumber = maxNumber + 1;
+    const formattedId = `XN-${nextNumber.toString().padStart(3, '0')}`;
+
+    const newPlayer: Player = {
+      id: `p-${Date.now()}`,
+      xnId: formattedId,
+      username: username.trim(),
+      email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+      password: password ? String(password) : undefined,
+      displayName: displayName.trim(),
+      ign: ign.trim().toUpperCase(),
+      role,
+      country: country ? country.trim() : 'Global',
+      bio: bio ? bio.trim() : 'Verified recruit of the XN Academy competitive network.',
+      avatarUrl: avatarUrl || undefined,
+      currentRank: 'E',
+      peakRank: 'E',
+      totalXp: 50, // Welcome signup bonus
+      academyStatus: 'Cadet',
+      verificationStatus: 'Verified',
+      joinedAt: new Date().toISOString(),
+      lifetimeStats: {
+        kills: 0,
+        wins: 0,
+        matches: 0,
+        kd: 0.0,
+        winRate: 0.0, // Cumulative win rate
+        hs: 0.0
+      }
+    };
+
+    dbPlayers.unshift(newPlayer);
+    saveDatabase();
+
+    // Create system audit log
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'OPERATIVE_REGISTERED',
+      timestamp: new Date().toISOString(),
+      actorType: 'system',
+      details: `New account assigned official permanent identifier: ${formattedId} (${displayName})`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    // Return player without leaking password
+    const { password: _, ...safePlayer } = newPlayer;
+    res.status(201).json({ player: safePlayer, auditLog: log });
   });
 
-  app.put('/api/players/:xnId', async (req: Request, res: Response) => {
-    const { xnId } = req.params;
-    const { rows } = await pool.query('SELECT * FROM players WHERE lower(xn_id)=$1', [xnId.toLowerCase()]);
-    if (!rows.length) return res.status(404).json({ error: 'Player not found' });
-    const current = rows[0];
-    const { displayName, ign, role, country, bio, avatarUrl } = req.body;
+  // POST Login player
+  app.post('/api/players/login', (req: Request, res: Response) => {
+    const { identifier, password } = req.body;
 
-    await pool.query(
-      `UPDATE players SET display_name=$1, ign=$2, role=$3, country=$4, bio=$5, avatar_url=$6 WHERE id=$7`,
-      [
-        displayName ? String(displayName).trim() : current.display_name,
-        ign ? String(ign).trim().toUpperCase() : current.ign,
-        role || current.role,
-        country !== undefined ? String(country).trim() : current.country,
-        bio !== undefined ? String(bio).trim() : current.bio,
-        avatarUrl !== undefined ? avatarUrl : current.avatar_url,
-        current.id,
-      ]
+    if (!identifier) {
+      return res.status(400).json({ error: 'Identifier is required' });
+    }
+
+    const clean = identifier.trim().toLowerCase();
+    const player = dbPlayers.find(
+      p =>
+        p.xnId.toLowerCase() === clean ||
+        p.username.toLowerCase() === clean ||
+        p.email.toLowerCase() === clean ||
+        p.ign.toLowerCase() === clean
     );
-    const { rows: updated } = await pool.query('SELECT * FROM players WHERE id=$1', [current.id]);
-    res.json({ player: rowToPlayer(updated[0]) });
+
+    if (!player) {
+      return res.status(404).json({ error: 'Operative not found with provided identifier' });
+    }
+
+    // If player registered with a password, enforce password match
+    if (player.password && password !== undefined) {
+      if (player.password !== String(password)) {
+        return res.status(401).json({ error: 'Invalid operative clearance password' });
+      }
+    }
+
+    const { password: _, ...safePlayer } = player;
+    res.json({ player: safePlayer, message: 'Authentication successful' });
   });
 
-  app.get('/api/submissions', async (req: Request, res: Response) => {
+  // PUT update player profile (Partial Merge to prevent overwriting existing data)
+  app.put('/api/players/:xnId', (req: Request, res: Response) => {
+    const { xnId } = req.params;
+    const playerIndex = dbPlayers.findIndex(
+      p => p.xnId.toLowerCase() === xnId.toLowerCase()
+    );
+
+    if (playerIndex === -1) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+
+    const current = dbPlayers[playerIndex];
+    const { displayName, ign, role, country, bio, avatarUrl, academyStatus, verificationStatus, lifetimeStats } = req.body;
+
+    // Perform partial non-destructive merge
+    const mergedLifetimeStats: LifetimeStats = {
+      ...current.lifetimeStats,
+      ...(lifetimeStats || {})
+    };
+
+    const updated: Player = {
+      ...current,
+      displayName: displayName !== undefined ? displayName.trim() : current.displayName,
+      ign: ign !== undefined ? ign.trim().toUpperCase() : current.ign,
+      role: role !== undefined ? role : current.role,
+      country: country !== undefined ? country.trim() : current.country,
+      bio: bio !== undefined ? bio.trim() : current.bio,
+      avatarUrl: avatarUrl !== undefined ? avatarUrl : current.avatarUrl,
+      academyStatus: academyStatus !== undefined ? academyStatus : current.academyStatus,
+      verificationStatus: verificationStatus !== undefined ? verificationStatus : current.verificationStatus,
+      lifetimeStats: mergedLifetimeStats
+    };
+
+    dbPlayers[playerIndex] = updated;
+    saveDatabase();
+
+    const { password: _, ...safePlayer } = updated;
+    res.json({ player: safePlayer });
+  });
+
+  // GET all submissions
+  app.get('/api/submissions', (req: Request, res: Response) => {
     const { status, xnId } = req.query;
-    const clauses: string[] = [];
-    const params: any[] = [];
-    if (status && status !== 'ALL') { params.push(status); clauses.push(`status = $${params.length}`); }
-    if (xnId) { params.push(String(xnId).toLowerCase()); clauses.push(`lower(xn_id) = $${params.length}`); }
-    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const { rows } = await pool.query(`SELECT * FROM submissions ${where} ORDER BY created_at DESC`, params);
-    const list = rows.map(rowToSubmission);
+    let list = [...dbSubmissions];
+
+    if (status && status !== 'ALL') {
+      list = list.filter(s => s.status === status);
+    }
+    if (xnId) {
+      list = list.filter(s => s.xnId.toLowerCase() === String(xnId).toLowerCase());
+    }
+
     res.json({ submissions: list, count: list.length });
   });
 
-  app.post('/api/submissions', async (req: Request, res: Response) => {
+  // POST create new submission
+  app.post('/api/submissions', (req: Request, res: Response) => {
     const { xnId, stats, evidenceUrl } = req.body;
-    const safeStats = stats || { kills: 0, wins: 0, matches: 1, kd: 0, winRate: 0, hs: 0 };
 
-    const { rows: playerRows } = await pool.query('SELECT * FROM players WHERE lower(xn_id)=$1', [(xnId || '').toLowerCase()]);
-    const player = playerRows[0] ? rowToPlayer(playerRows[0]) : null;
-    const playerName = player ? player.displayName : (req.body.playerName || 'Recruit Operative');
-    const playerIgn = player ? player.ign : (req.body.playerIgn || 'OPERATIVE');
+    const player = dbPlayers.find(p => p.xnId.toLowerCase() === (xnId || '').toLowerCase());
+    const playerName = player ? player.displayName : req.body.playerName || 'Recruit Operative';
+    const playerIgn = player ? player.ign : req.body.playerIgn || 'OPERATIVE';
+
+    const safeStats: SubmissionStats = {
+      kills: Math.max(0, Math.round(Number(stats?.kills) || 0)),
+      wins: Math.max(0, Math.round(Number(stats?.wins) || 0)),
+      matches: Math.max(1, Math.round(Number(stats?.matches) || 1)),
+      kd: Number(stats?.kd) || 0,
+      winRate: Number(stats?.winRate) || 0,
+      hs: Number(stats?.hs) || 0
+    };
 
     const score = calculateSubmissionScore(safeStats);
+
+    // Anti-cheat fraud heuristic checks
     const fraudFlags: string[] = [];
     if (safeStats.kd > 12.0) fraudFlags.push('Extreme K/D Anomaly (>12.0)');
     if (safeStats.hs > 85.0) fraudFlags.push('Abnormal Headshot Ratio (>85%)');
     if (safeStats.winRate > 95 && safeStats.matches > 5) fraudFlags.push('Unusually High Win Rate (>95%)');
 
-    const id = `sub-${Math.floor(1000 + Math.random() * 9000)}`;
-    const status = fraudFlags.length > 0 ? 'flagged' : 'pending';
-    const finalXnId = xnId || (player ? player.xnId : 'XN-UNKNOWN');
+    const newSub: Submission = {
+      id: `sub-${Math.floor(1000 + Math.random() * 9000)}`,
+      xnId: xnId || (player ? player.xnId : 'XN-UNKNOWN'),
+      playerName,
+      playerIgn,
+      createdAt: new Date().toISOString(),
+      status: fraudFlags.length > 0 ? 'flagged' : 'pending',
+      stats: safeStats,
+      evidenceUrl: evidenceUrl || undefined,
+      fraudFlags,
+      scoreBreakdown: score
+    };
 
-    await pool.query(
-      `INSERT INTO submissions (id, xn_id, player_name, player_ign, status, stats, evidence_url, fraud_flags, score_breakdown)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [id, finalXnId, playerName, playerIgn, status, JSON.stringify(safeStats), evidenceUrl || null, JSON.stringify(fraudFlags), JSON.stringify(score)]
-    );
-    const { rows } = await pool.query('SELECT * FROM submissions WHERE id=$1', [id]);
-    const submission = rowToSubmission(rows[0]);
+    dbSubmissions.unshift(newSub);
 
-    const log = await logEvent(
-      fraudFlags.length > 0 ? 'SITREP_FLAGGED' : 'SITREP_SUBMITTED',
-      'system',
-      `${id} from ${playerName} (${finalXnId}) queued for review.${fraudFlags.length ? ` Flags: ${fraudFlags.join(', ')}` : ''}`
-    );
-    res.status(201).json({ submission, auditLog: log });
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: fraudFlags.length > 0 ? 'SITREP_FLAGGED' : 'SITREP_SUBMITTED',
+      timestamp: new Date().toISOString(),
+      actorType: 'system',
+      details: `${newSub.id} from ${playerName} (${newSub.xnId}) queued for review.${fraudFlags.length ? ` Flags: ${fraudFlags.join(', ')}` : ''}`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.status(201).json({ submission: newSub, auditLog: log });
   });
 
-  app.post('/api/submissions/:id/approve', requireAdmin, async (req: Request, res: Response) => {
+  // POST approve submission (Updates cumulative win rate & rank thresholds)
+  app.post('/api/submissions/:id/approve', (req: Request, res: Response) => {
     const { id } = req.params;
-    const { rows } = await pool.query('SELECT * FROM submissions WHERE id=$1', [id]);
-    if (!rows.length) return res.status(404).json({ error: 'Submission not found' });
-    const sub = rowToSubmission(rows[0]);
-    if (sub.status === 'approved') return res.status(400).json({ error: 'Submission is already approved' });
+    const subIndex = dbSubmissions.findIndex(s => s.id === id);
 
-    const awardedXp = sub.scoreBreakdown.total;
-    await pool.query(`UPDATE submissions SET status='approved', reviewed_by='Admin_Lead', reviewed_at=now() WHERE id=$1`, [id]);
-    const { rows: updatedSubRows } = await pool.query('SELECT * FROM submissions WHERE id=$1', [id]);
-    const updatedSub = rowToSubmission(updatedSubRows[0]);
-
-    let updatedPlayer = null;
-    const { rows: playerRows } = await pool.query('SELECT * FROM players WHERE xn_id=$1', [sub.xnId]);
-    if (playerRows.length) {
-      const target = rowToPlayer(playerRows[0]);
-      const newTotalXp = target.totalXp + awardedXp;
-      const newRank = calculateRank(newTotalXp);
-      const peak = higherRank(newRank, target.peakRank);
-
-      const totalMatches = target.lifetimeStats.matches + sub.stats.matches;
-      const totalWins = target.lifetimeStats.wins + sub.stats.wins;
-      const totalKills = target.lifetimeStats.kills + sub.stats.kills;
-      const updatedKd = totalMatches > 0 ? parseFloat((totalKills / Math.max(1, totalMatches * 0.8)).toFixed(2)) : sub.stats.kd;
-      const updatedWinRate = totalMatches > 0 ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) : sub.stats.winRate;
-      const updatedHs = parseFloat(((target.lifetimeStats.hs + sub.stats.hs) / 2).toFixed(1));
-      const newStats: LifetimeStats = { kills: totalKills, wins: totalWins, matches: totalMatches, kd: updatedKd, winRate: updatedWinRate, hs: updatedHs };
-
-      await pool.query(
-        `UPDATE players SET total_xp=$1, current_rank=$2, peak_rank=$3, lifetime_stats=$4 WHERE xn_id=$5`,
-        [newTotalXp, newRank, peak, JSON.stringify(newStats), sub.xnId]
-      );
-      const { rows: freshPlayer } = await pool.query('SELECT * FROM players WHERE xn_id=$1', [sub.xnId]);
-      updatedPlayer = rowToPlayer(freshPlayer[0]);
+    if (subIndex === -1) {
+      return res.status(404).json({ error: 'Submission not found' });
     }
 
-    const log = await logEvent('SUBMISSION_APPROVED', 'admin', `${sub.id} (${sub.playerName}) approved. +${awardedXp} XP awarded.`);
+    const sub = dbSubmissions[subIndex];
+    if (sub.status === 'approved') {
+      return res.status(400).json({ error: 'Submission is already approved' });
+    }
+
+    const awardedXp = sub.scoreBreakdown.total;
+    const targetPlayerIndex = dbPlayers.findIndex(p => p.xnId === sub.xnId);
+
+    const updatedSub: Submission = {
+      ...sub,
+      status: 'approved',
+      reviewedBy: req.body.reviewedBy || 'Admin_Lead',
+      reviewedAt: new Date().toISOString()
+    };
+    dbSubmissions[subIndex] = updatedSub;
+
+    let updatedPlayer: Player | null = null;
+
+    if (targetPlayerIndex !== -1) {
+      const targetPlayer = dbPlayers[targetPlayerIndex];
+      const newTotalXp = (targetPlayer.totalXp ?? 0) + awardedXp;
+      const newRank = calculateRank(newTotalXp);
+
+      const oldStats = targetPlayer.lifetimeStats || { kills: 0, wins: 0, matches: 0, kd: 0, winRate: 0, hs: 0 };
+      const totalMatches = (oldStats.matches || 0) + (sub.stats.matches || 1);
+      const totalWins = (oldStats.wins || 0) + (sub.stats.wins || 0);
+      const totalKills = (oldStats.kills || 0) + (sub.stats.kills || 0);
+      const updatedKd = totalMatches > 0 ? parseFloat((totalKills / Math.max(1, totalMatches * 0.8)).toFixed(2)) : sub.stats.kd;
+      
+      // Cumulative win rate calculation: totalWins / totalMatches * 100
+      const updatedWinRate = totalMatches > 0 
+        ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) 
+        : 0;
+      
+      const updatedHs = parseFloat((((oldStats.hs || 0) + (sub.stats.hs || 0)) / 2).toFixed(1));
+
+      updatedPlayer = {
+        ...targetPlayer,
+        totalXp: newTotalXp,
+        currentRank: newRank,
+        peakRank: newRank > targetPlayer.peakRank ? newRank : targetPlayer.peakRank,
+        lifetimeStats: {
+          kills: totalKills,
+          wins: totalWins,
+          matches: totalMatches,
+          kd: updatedKd,
+          winRate: updatedWinRate,
+          hs: updatedHs
+        }
+      };
+
+      dbPlayers[targetPlayerIndex] = updatedPlayer;
+    }
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'SUBMISSION_APPROVED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `${sub.id} (${sub.playerName}) approved by ${updatedSub.reviewedBy}. +${awardedXp} XP awarded.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
     res.json({ submission: updatedSub, player: updatedPlayer, auditLog: log });
   });
 
-  app.post('/api/submissions/:id/flag', requireAdmin, async (req: Request, res: Response) => {
+  // POST flag submission
+  app.post('/api/submissions/:id/flag', (req: Request, res: Response) => {
     const { id } = req.params;
-    const { rows } = await pool.query('SELECT * FROM submissions WHERE id=$1', [id]);
-    if (!rows.length) return res.status(404).json({ error: 'Submission not found' });
-    await pool.query(`UPDATE submissions SET status='flagged' WHERE id=$1`, [id]);
-    const { rows: updated } = await pool.query('SELECT * FROM submissions WHERE id=$1', [id]);
-    const log = await logEvent('SUBMISSION_FLAGGED', 'admin', `Submission ${id} placed on hold for anti-cheat verification.`);
-    res.json({ submission: rowToSubmission(updated[0]), auditLog: log });
+    const subIndex = dbSubmissions.findIndex(s => s.id === id);
+
+    if (subIndex === -1) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    const updatedSub: Submission = {
+      ...dbSubmissions[subIndex],
+      status: 'flagged'
+    };
+    dbSubmissions[subIndex] = updatedSub;
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'SUBMISSION_FLAGGED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Submission ${id} placed on hold for anti-cheat verification.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.json({ submission: updatedSub, auditLog: log });
   });
 
-  app.post('/api/submissions/:id/reject', requireAdmin, async (req: Request, res: Response) => {
+  // POST reject submission
+  app.post('/api/submissions/:id/reject', (req: Request, res: Response) => {
     const { id } = req.params;
-    const { reason } = req.body;
-    const { rows } = await pool.query('SELECT * FROM submissions WHERE id=$1', [id]);
-    if (!rows.length) return res.status(404).json({ error: 'Submission not found' });
-    const rejectionReason = reason || 'Screenshot telemetry or resolution verification failed';
-    await pool.query(
-      `UPDATE submissions SET status='rejected', rejection_reason=$1, reviewed_by='Admin_Lead', reviewed_at=now() WHERE id=$2`,
-      [rejectionReason, id]
-    );
-    const { rows: updated } = await pool.query('SELECT * FROM submissions WHERE id=$1', [id]);
-    const log = await logEvent('SUBMISSION_REJECTED', 'admin', `Submission ${id} rejected. Reason: ${rejectionReason}`);
-    res.json({ submission: rowToSubmission(updated[0]), auditLog: log });
-  });
+    const { reason, reviewedBy } = req.body;
+    const subIndex = dbSubmissions.findIndex(s => s.id === id);
 
-  app.get('/api/audit-logs', async (req: Request, res: Response) => {
-    const { rows } = await pool.query('SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 500');
-    res.json({ auditLogs: rows.map(rowToLog) });
-  });
-
-  app.get('/api/admin/stats', async (req: Request, res: Response) => {
-    const totalPlayers = (await pool.query('SELECT COUNT(*)::int c FROM players')).rows[0].c;
-    const activePlayers = (await pool.query(`SELECT COUNT(*)::int c FROM players WHERE (lifetime_stats->>'matches')::int > 0`)).rows[0].c;
-    const pendingSubmissions = (await pool.query(`SELECT COUNT(*)::int c FROM submissions WHERE status='pending'`)).rows[0].c;
-    const flaggedSubmissions = (await pool.query(`SELECT COUNT(*)::int c FROM submissions WHERE status='flagged'`)).rows[0].c;
-    const approvedSubmissions = (await pool.query(`SELECT COUNT(*)::int c FROM submissions WHERE status='approved'`)).rows[0].c;
-    const rejectedSubmissions = (await pool.query(`SELECT COUNT(*)::int c FROM submissions WHERE status='rejected'`)).rows[0].c;
-    const totalXpAwarded = (await pool.query(`SELECT COALESCE(SUM((score_breakdown->>'total')::int),0)::int s FROM submissions WHERE status='approved'`)).rows[0].s;
-    res.json({ totalPlayers, activePlayers, pendingSubmissions, flaggedSubmissions, approvedSubmissions, rejectedSubmissions, totalXpAwarded });
-  });
-
-  app.get('/api/admin/status', async (req: Request, res: Response) => {
-    const totalAdmins = (await pool.query('SELECT COUNT(*)::int c FROM admins')).rows[0].c;
-    const pendingRequestsCount = (await pool.query(`SELECT COUNT(*)::int c FROM admin_requests WHERE status='pending'`)).rows[0].c;
-    res.json({ hasInitialAdmin: totalAdmins > 0, totalAdmins, pendingRequestsCount });
-  });
-
-  app.post('/api/admin/bootstrap', async (req: Request, res: Response) => {
-    const count = (await pool.query('SELECT COUNT(*)::int c FROM admins')).rows[0].c;
-    if (count > 0) {
-      return res.status(403).json({ error: 'Initial Head of Command has already been provisioned. New admin applicants must submit a clearance request for review.' });
+    if (subIndex === -1) {
+      return res.status(404).json({ error: 'Submission not found' });
     }
-    const { username, email, password, displayName } = req.body;
-    if (!username || !password || !displayName) {
-      return res.status(400).json({ error: 'Username, display name, and password are required' });
-    }
-    const id = `admin-${Date.now()}`;
-    const passwordHash = await bcrypt.hash(String(password), 10);
-    await pool.query(
-      `INSERT INTO admins (id, username, email, display_name, password_hash, role, is_head_of_command) VALUES ($1,$2,$3,$4,$5,'HEAD_OF_COMMAND',true)`,
-      [id, String(username).trim(), email ? String(email).trim() : `${String(username).trim()}@xn-academy.gg`, String(displayName).trim(), passwordHash]
-    );
-    const { rows } = await pool.query('SELECT * FROM admins WHERE id=$1', [id]);
-    const admin = rowToSafeAdmin(rows[0]);
-    const token = await createAdminSession(admin.id);
-    const log = await logEvent('HEAD_OF_COMMAND_PROVISIONED', 'admin', `Head of Command clearance assigned to ${admin.displayName} (${admin.username}). Admin direct registration is now permanently locked.`);
-    res.status(201).json({ message: 'Head of Command profile initialized successfully.', admin, token, auditLog: log });
+
+    const updatedSub: Submission = {
+      ...dbSubmissions[subIndex],
+      status: 'rejected',
+      rejectionReason: reason || 'Screenshot telemetry or resolution verification failed',
+      reviewedBy: reviewedBy || 'Admin_Lead',
+      reviewedAt: new Date().toISOString()
+    };
+    dbSubmissions[subIndex] = updatedSub;
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'SUBMISSION_REJECTED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Submission ${id} rejected by ${updatedSub.reviewedBy}. Reason: ${updatedSub.rejectionReason}`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.json({ submission: updatedSub, auditLog: log });
   });
 
-  app.post('/api/admin/request-access', async (req: Request, res: Response) => {
-    const { username, email, password, displayName, reason } = req.body;
-    if (!username || !password || !displayName) return res.status(400).json({ error: 'Missing required credentials' });
-
-    const clean = String(username).trim().toLowerCase();
-    const existingAdmin = await pool.query('SELECT 1 FROM admins WHERE lower(username)=$1', [clean]);
-    if (existingAdmin.rows.length) return res.status(409).json({ error: 'An admin account with this username already exists' });
-    const existingReq = await pool.query(`SELECT 1 FROM admin_requests WHERE lower(username)=$1 AND status='pending'`, [clean]);
-    if (existingReq.rows.length) return res.status(409).json({ error: 'A clearance request for this username is already pending review' });
-
-    const id = `req-${Date.now()}`;
-    const passwordHash = await bcrypt.hash(String(password), 10);
-    await pool.query(
-      `INSERT INTO admin_requests (id, username, email, display_name, password_hash, reason, status) VALUES ($1,$2,$3,$4,$5,$6,'pending')`,
-      [
-        id, String(username).trim(),
-        email ? String(email).trim() : `${String(username).trim()}@xn-academy.gg`,
-        String(displayName).trim(), passwordHash,
-        reason ? String(reason).trim() : 'Competitive staff supervisor & telemetry audit officer application.',
-      ]
-    );
-    const { rows } = await pool.query('SELECT * FROM admin_requests WHERE id=$1', [id]);
-    const safeReq = rowToSafeRequest(rows[0]);
-    await logEvent('ADMIN_CLEARANCE_REQUESTED', 'system', `Staff clearance application submitted by ${safeReq.displayName} (@${safeReq.username}). Pending Head of Command review.`);
-    res.status(201).json({ message: 'Clearance application submitted. Awaiting Head of Command approval.', request: safeReq });
+  // GET audit logs
+  app.get('/api/audit-logs', (req: Request, res: Response) => {
+    res.json({ auditLogs: dbAuditLogs });
   });
 
-  app.post('/api/admin/login', async (req: Request, res: Response) => {
-    const { identifier, password } = req.body;
-    if (!identifier || !password) return res.status(400).json({ error: 'Username/Email and password are required' });
-    const clean = String(identifier).trim().toLowerCase();
+  // GET admin stats
+  app.get('/api/admin/stats', (req: Request, res: Response) => {
+    const totalPlayers = dbPlayers.length;
+    const activePlayers = dbPlayers.filter(p => (p.lifetimeStats?.matches ?? 0) > 0).length;
+    const pendingSubmissions = dbSubmissions.filter(s => s.status === 'pending').length;
+    const flaggedSubmissions = dbSubmissions.filter(s => s.status === 'flagged').length;
+    const approvedSubmissions = dbSubmissions.filter(s => s.status === 'approved').length;
+    const rejectedSubmissions = dbSubmissions.filter(s => s.status === 'rejected').length;
+    const totalXpAwarded = dbSubmissions
+      .filter(s => s.status === 'approved')
+      .reduce((acc, s) => acc + (s.scoreBreakdown?.total ?? 0), 0);
 
-    const { rows } = await pool.query('SELECT * FROM admins WHERE lower(username)=$1 OR lower(email)=$1', [clean]);
-    if (!rows.length) {
-      const { rows: pendingRows } = await pool.query(
-        `SELECT * FROM admin_requests WHERE (lower(username)=$1 OR lower(email)=$1) ORDER BY requested_at DESC LIMIT 1`,
-        [clean]
-      );
-      const pending = pendingRows[0];
-      if (pending && pending.status === 'pending') {
-        return res.status(403).json({ error: 'Your staff clearance request is currently PENDING approval by the Head of Command.' });
-      }
-      if (pending && pending.status === 'rejected') {
-        return res.status(403).json({ error: 'Your staff clearance request was rejected by administration.' });
-      }
-      return res.status(404).json({ error: 'No authorized staff account found with provided credentials' });
-    }
-    const admin = rows[0];
-    const ok = await bcrypt.compare(String(password), admin.password_hash);
-    if (!ok) return res.status(401).json({ error: 'Invalid security clearance passkey' });
-    const token = await createAdminSession(admin.id);
-    res.json({ admin: rowToSafeAdmin(admin), token, message: 'Staff clearance validated. Welcome to Command Console.' });
-  });
-
-  app.get('/api/admin/requests', requireAdmin, async (req: Request, res: Response) => {
-    const { rows } = await pool.query('SELECT * FROM admin_requests ORDER BY requested_at DESC');
-    res.json({ requests: rows.map(rowToSafeRequest) });
-  });
-
-  app.post('/api/admin/requests/:id/approve', requireAdmin, async (req: Request, res: Response) => {
-    const { id } = req.params;
-    const { rows } = await pool.query('SELECT * FROM admin_requests WHERE id=$1', [id]);
-    if (!rows.length) return res.status(404).json({ error: 'Clearance request not found' });
-    const targetReq = rows[0];
-    if (targetReq.status === 'approved') return res.status(400).json({ error: 'Request is already approved' });
-
-    await pool.query(`UPDATE admin_requests SET status='approved', reviewed_at=now(), reviewed_by='Head of Command' WHERE id=$1`, [id]);
-    const adminId = `admin-${Date.now()}`;
-    await pool.query(
-      `INSERT INTO admins (id, username, email, display_name, password_hash, role, is_head_of_command) VALUES ($1,$2,$3,$4,$5,'STAFF_OFFICER',false)`,
-      [adminId, targetReq.username, targetReq.email, targetReq.display_name, targetReq.password_hash]
-    );
-    const { rows: updatedReq } = await pool.query('SELECT * FROM admin_requests WHERE id=$1', [id]);
-    const { rows: newAdminRows } = await pool.query('SELECT * FROM admins WHERE id=$1', [adminId]);
-    const log = await logEvent('ADMIN_CLEARANCE_APPROVED', 'admin', `Staff clearance approved for ${targetReq.display_name} (@${targetReq.username}). Officer role granted.`);
     res.json({
-      message: `Staff clearance approved for ${targetReq.display_name}`,
-      request: rowToSafeRequest(updatedReq[0]),
-      newAdmin: rowToSafeAdmin(newAdminRows[0]),
-      auditLog: log,
+      totalPlayers,
+      activePlayers,
+      pendingSubmissions,
+      flaggedSubmissions,
+      approvedSubmissions,
+      rejectedSubmissions,
+      totalXpAwarded
     });
   });
 
-  app.post('/api/admin/requests/:id/reject', requireAdmin, async (req: Request, res: Response) => {
+  // --- ADMIN AUTH & CLEARANCE MANAGEMENT ROUTES ---
+
+  // GET Admin System Status
+  app.get('/api/admin/status', (req: Request, res: Response) => {
+    res.json({
+      hasInitialAdmin: dbAdmins.length > 0,
+      totalAdmins: dbAdmins.length,
+      pendingRequestsCount: dbAdminRequests.filter(r => r.status === 'pending').length
+    });
+  });
+
+  // POST Bootstrap first Head of Command (only open when 0 admins exist)
+  app.post('/api/admin/bootstrap', (req: Request, res: Response) => {
+    if (dbAdmins.length > 0) {
+      return res.status(403).json({
+        error: 'Initial Head of Command has already been provisioned. New admin applicants must submit a clearance request for review.'
+      });
+    }
+
+    const { username, email, password, displayName, linkedXnId } = req.body;
+    if (!username || !password || !displayName) {
+      return res.status(400).json({ error: 'Username, display name, and password are required' });
+    }
+
+    const firstAdmin: AdminUser = {
+      id: `admin-${Date.now()}`,
+      username: username.trim(),
+      email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+      displayName: displayName.trim(),
+      password: String(password),
+      role: 'HEAD_OF_COMMAND',
+      isHeadOfCommand: true,
+      linkedXnId: linkedXnId || undefined,
+      createdAt: new Date().toISOString()
+    };
+
+    dbAdmins.push(firstAdmin);
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'HEAD_OF_COMMAND_PROVISIONED',
+      timestamp: new Date().toISOString(),
+      actorType: 'hoc',
+      details: `Supreme Head of Command authority assigned to ${displayName} (@${username}). Direct admin registration locked.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    const { password: _, ...safeAdmin } = firstAdmin;
+    res.status(201).json({
+      message: 'Head of Command profile initialized successfully.',
+      admin: safeAdmin,
+      auditLog: log
+    });
+  });
+
+  // POST Request Admin Access
+  app.post('/api/admin/request-access', (req: Request, res: Response) => {
+    const { username, email, password, displayName, reason } = req.body;
+
+    if (!username || !password || !displayName) {
+      return res.status(400).json({ error: 'Missing required credentials' });
+    }
+
+    // Check if already an admin
+    if (dbAdmins.some(a => a.username.toLowerCase() === username.trim().toLowerCase())) {
+      return res.status(409).json({ error: 'An admin account with this username already exists' });
+    }
+
+    // Check if already has a pending request
+    if (dbAdminRequests.some(r => r.username.toLowerCase() === username.trim().toLowerCase() && r.status === 'pending')) {
+      return res.status(409).json({ error: 'A clearance request for this username is already pending review' });
+    }
+
+    const newRequest: AdminRequest = {
+      id: `req-${Date.now()}`,
+      username: username.trim(),
+      email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+      displayName: displayName.trim(),
+      password: String(password),
+      reason: reason ? reason.trim() : 'Competitive staff supervisor & telemetry audit officer application.',
+      status: 'pending',
+      requestedAt: new Date().toISOString()
+    };
+
+    dbAdminRequests.unshift(newRequest);
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ADMIN_CLEARANCE_REQUESTED',
+      timestamp: new Date().toISOString(),
+      actorType: 'system',
+      details: `Staff clearance application submitted by ${displayName} (@${username}). Pending Head of Command review.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.status(201).json({
+      message: 'Clearance application submitted. Awaiting Head of Command approval.',
+      request: {
+        id: newRequest.id,
+        username: newRequest.username,
+        displayName: newRequest.displayName,
+        status: newRequest.status,
+        requestedAt: newRequest.requestedAt
+      }
+    });
+  });
+
+  // POST Admin Login
+  app.post('/api/admin/login', (req: Request, res: Response) => {
+    const { identifier, password } = req.body;
+
+    if (!identifier || !password) {
+      return res.status(400).json({ error: 'Username/Email and password are required' });
+    }
+
+    const clean = identifier.trim().toLowerCase();
+    const admin = dbAdmins.find(
+      a => a.username.toLowerCase() === clean || a.email.toLowerCase() === clean
+    );
+
+    if (!admin) {
+      const pending = dbAdminRequests.find(
+        r => r.username.toLowerCase() === clean || r.email.toLowerCase() === clean
+      );
+      if (pending && pending.status === 'pending') {
+        return res.status(403).json({
+          error: 'Your staff clearance request is currently PENDING approval by the Head of Command.'
+        });
+      }
+      if (pending && pending.status === 'rejected') {
+        return res.status(403).json({
+          error: 'Your staff clearance request was rejected by administration.'
+        });
+      }
+      return res.status(404).json({ error: 'No authorized staff account found with provided credentials' });
+    }
+
+    if (admin.password && admin.password !== String(password)) {
+      return res.status(401).json({ error: 'Invalid security clearance passkey' });
+    }
+
+    const { password: _, ...safeAdmin } = admin;
+    res.json({
+      admin: safeAdmin,
+      message: `${admin.isHeadOfCommand ? 'Head of Command' : 'Staff Officer'} clearance validated.`
+    });
+  });
+
+  // GET all admin clearance requests
+  app.get('/api/admin/requests', (req: Request, res: Response) => {
+    const safeRequests = dbAdminRequests.map(({ password: _, ...reqWithoutPass }) => reqWithoutPass);
+    res.json({ requests: safeRequests });
+  });
+
+  // POST approve admin clearance request (HoC or staff)
+  app.post('/api/admin/requests/:id/approve', (req: Request, res: Response) => {
     const { id } = req.params;
-    const { rows } = await pool.query('SELECT * FROM admin_requests WHERE id=$1', [id]);
-    if (!rows.length) return res.status(404).json({ error: 'Clearance request not found' });
-    await pool.query(`UPDATE admin_requests SET status='rejected', reviewed_at=now(), reviewed_by='Head of Command' WHERE id=$1`, [id]);
-    const { rows: updated } = await pool.query('SELECT * FROM admin_requests WHERE id=$1', [id]);
-    res.json({ message: 'Request rejected', request: rowToSafeRequest(updated[0]) });
+    const reqIndex = dbAdminRequests.findIndex(r => r.id === id);
+
+    if (reqIndex === -1) {
+      return res.status(404).json({ error: 'Clearance request not found' });
+    }
+
+    const targetReq = dbAdminRequests[reqIndex];
+    if (targetReq.status === 'approved') {
+      return res.status(400).json({ error: 'Request is already approved' });
+    }
+
+    targetReq.status = 'approved';
+    targetReq.reviewedAt = new Date().toISOString();
+    targetReq.reviewedBy = req.body.reviewedBy || 'Head of Command';
+
+    // Add to active admins
+    const newAdmin: AdminUser = {
+      id: `admin-${Date.now()}`,
+      username: targetReq.username,
+      email: targetReq.email,
+      displayName: targetReq.displayName,
+      password: targetReq.password,
+      role: 'STAFF_OFFICER',
+      isHeadOfCommand: false,
+      createdAt: new Date().toISOString()
+    };
+
+    dbAdmins.push(newAdmin);
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ADMIN_CLEARANCE_APPROVED',
+      timestamp: new Date().toISOString(),
+      actorType: 'hoc',
+      details: `Staff clearance approved for ${targetReq.displayName} (@${targetReq.username}) by ${targetReq.reviewedBy}.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.json({
+      message: `Staff clearance approved for ${targetReq.displayName}`,
+      request: targetReq,
+      newAdmin: {
+        id: newAdmin.id,
+        username: newAdmin.username,
+        displayName: newAdmin.displayName,
+        role: newAdmin.role
+      }
+    });
   });
 
-  app.get('/api/admin/list', requireAdmin, async (req: Request, res: Response) => {
-    const { rows } = await pool.query('SELECT * FROM admins ORDER BY created_at ASC');
-    res.json({ admins: rows.map(rowToSafeAdmin) });
+  // POST reject admin clearance request
+  app.post('/api/admin/requests/:id/reject', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const reqIndex = dbAdminRequests.findIndex(r => r.id === id);
+
+    if (reqIndex === -1) {
+      return res.status(404).json({ error: 'Clearance request not found' });
+    }
+
+    const targetReq = dbAdminRequests[reqIndex];
+    targetReq.status = 'rejected';
+    targetReq.reviewedAt = new Date().toISOString();
+    targetReq.reviewedBy = req.body.reviewedBy || 'Head of Command';
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ADMIN_CLEARANCE_REJECTED',
+      timestamp: new Date().toISOString(),
+      actorType: 'hoc',
+      details: `Staff clearance rejected for ${targetReq.displayName} (@${targetReq.username}) by ${targetReq.reviewedBy}.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.json({ message: 'Request rejected', request: targetReq });
   });
 
+  // GET list of all admins
+  app.get('/api/admin/list', (req: Request, res: Response) => {
+    const safeAdmins = dbAdmins.map(({ password: _, ...a }) => a);
+    res.json({ admins: safeAdmins });
+  });
+
+  // =========================================================================
+  // HEAD OF COMMAND (HoC) EXCLUSIVE COMMAND CONTROLS
+  // Note: Head of Command is not an admin, but rather above him even though he can perform the work of an admin.
+  // =========================================================================
+
+  // POST HoC: Reset ALL ranks across the network
+  app.post('/api/admin/hoc/reset-all-ranks', (req: Request, res: Response) => {
+    const { hocUsername, reason } = req.body;
+
+    // Verify caller has Head of Command authority
+    const hocAdmin = dbAdmins.find(a => a.isHeadOfCommand && (!hocUsername || a.username.toLowerCase() === hocUsername.toLowerCase()));
+    if (dbAdmins.length > 0 && !hocAdmin) {
+      return res.status(403).json({ error: 'Unauthorized: Only the Head of Command can perform a network-wide rank reset.' });
+    }
+
+    const resetCount = dbPlayers.length;
+    dbPlayers = dbPlayers.map(p => ({
+      ...p,
+      totalXp: 0,
+      currentRank: 'E'
+    }));
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ALL_RANKS_RESET_BY_HOC',
+      timestamp: new Date().toISOString(),
+      actorType: 'hoc',
+      details: `SUPREME COMMAND OVERRIDE: Network-wide rank reset executed by Head of Command (${hocUsername || 'Supreme Commander'}). Total operatives reset: ${resetCount}. Reason: ${reason || 'Seasonal calibration'}`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.json({
+      message: `Successfully reset all ${resetCount} operative ranks to Rank E (0 XP).`,
+      resetCount,
+      auditLog: log
+    });
+  });
+
+  // POST HoC: Reset an individual player's rank
+  app.post('/api/admin/hoc/reset-player-rank', (req: Request, res: Response) => {
+    const { xnId, hocUsername, reason } = req.body;
+
+    if (!xnId) {
+      return res.status(400).json({ error: 'Target player XN-ID is required' });
+    }
+
+    const playerIndex = dbPlayers.findIndex(p => p.xnId.toLowerCase() === xnId.toLowerCase());
+    if (playerIndex === -1) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+
+    const previousRank = dbPlayers[playerIndex].currentRank;
+    const previousXp = dbPlayers[playerIndex].totalXp;
+
+    dbPlayers[playerIndex] = {
+      ...dbPlayers[playerIndex],
+      totalXp: 0,
+      currentRank: 'E'
+    };
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'PLAYER_RANK_RESET_BY_HOC',
+      timestamp: new Date().toISOString(),
+      actorType: 'hoc',
+      details: `Head of Command reset rank for ${dbPlayers[playerIndex].displayName} (${xnId}) from ${previousRank} (${previousXp} XP) to Rank E (0 XP). Reason: ${reason || 'Administrative penalty / Rank reset'}`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    const { password: _, ...safePlayer } = dbPlayers[playerIndex];
+    res.json({
+      message: `Reset rank for ${safePlayer.displayName} (${safePlayer.xnId}) to Rank E (0 XP).`,
+      player: safePlayer,
+      auditLog: log
+    });
+  });
+
+  // POST HoC: Deduct XP from an operative
+  app.post('/api/admin/hoc/deduct-xp', (req: Request, res: Response) => {
+    const { xnId, amount, hocUsername, reason } = req.body;
+
+    if (!xnId) {
+      return res.status(400).json({ error: 'Target player XN-ID is required' });
+    }
+
+    const deductAmount = Math.max(1, Math.floor(Number(amount) || 50));
+    const playerIndex = dbPlayers.findIndex(p => p.xnId.toLowerCase() === xnId.toLowerCase());
+
+    if (playerIndex === -1) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+
+    const player = dbPlayers[playerIndex];
+    const previousXp = player.totalXp ?? 0;
+    const newXp = Math.max(0, previousXp - deductAmount);
+    const newRank = calculateRank(newXp);
+
+    dbPlayers[playerIndex] = {
+      ...player,
+      totalXp: newXp,
+      currentRank: newRank
+    };
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'XP_DEDUCTED_BY_HOC',
+      timestamp: new Date().toISOString(),
+      actorType: 'hoc',
+      details: `Head of Command deducted ${deductAmount} XP from ${player.displayName} (${xnId}). XP adjusted from ${previousXp} to ${newXp} (Rank: ${newRank}). Reason: ${reason || 'Conduct penalty / XP deduction'}`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    const { password: _, ...safePlayer } = dbPlayers[playerIndex];
+    res.json({
+      message: `Deducted ${deductAmount} XP from ${player.displayName}. New balance: ${newXp} XP (${newRank} Rank).`,
+      player: safePlayer,
+      auditLog: log
+    });
+  });
+
+  // =========================================================================
+  // ADMIN REWARD FEATURE (50 XP Reward)
+  // Admin can give out 50xp to any player as a reward ONLY when he crosses A rank (XP >= 5000 / Rank >= A).
+  // Head of Command can reward at any time.
+  // =========================================================================
+  app.post('/api/admin/reward-player', (req: Request, res: Response) => {
+    const { xnId, adminUsername, amount, reason } = req.body;
+
+    if (!xnId) {
+      return res.status(400).json({ error: 'Target player XN-ID is required' });
+    }
+
+    // Find the rewarding admin
+    const admin = dbAdmins.find(a => 
+      adminUsername && (a.username.toLowerCase() === adminUsername.toLowerCase() || a.displayName.toLowerCase() === adminUsername.toLowerCase())
+    ) || dbAdmins[0];
+
+    const isHoC = admin ? admin.isHeadOfCommand : true;
+
+    if (!isHoC) {
+      // For standard staff officer, check if admin has crossed A-Rank
+      // Check linked player profile or check if admin's operative persona has reached Rank A, S, or S-MAX
+      let adminPlayer = dbPlayers.find(p => 
+        (admin.linkedXnId && p.xnId.toLowerCase() === admin.linkedXnId.toLowerCase()) ||
+        p.username.toLowerCase() === admin.username.toLowerCase() ||
+        p.email.toLowerCase() === admin.email.toLowerCase()
+      );
+
+      const adminXp = adminPlayer ? (adminPlayer.totalXp ?? 0) : 0;
+      const adminRank = adminPlayer ? adminPlayer.currentRank : calculateRank(adminXp);
+
+      // Rank order requirement: Must cross A rank (A: 5000+, S: 10000+, S-MAX: 16000+)
+      const hasCrossedARank = adminXp >= 5000 || ['A', 'S', 'S-MAX'].includes(adminRank);
+
+      if (!hasCrossedARank) {
+        return res.status(403).json({
+          error: `Staff Clearance Locked: Admins can only distribute rewards after crossing A-Rank (5,000+ XP). Your current standing: ${adminRank} Rank (${adminXp} XP).`
+        });
+      }
+    }
+
+    // Target player lookup
+    const playerIndex = dbPlayers.findIndex(p => p.xnId.toLowerCase() === xnId.toLowerCase());
+    if (playerIndex === -1) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+
+    const rewardAmount = Math.max(1, Math.floor(Number(amount) || 50));
+    const player = dbPlayers[playerIndex];
+    const previousXp = player.totalXp ?? 0;
+    const newXp = previousXp + rewardAmount;
+    const newRank = calculateRank(newXp);
+
+    dbPlayers[playerIndex] = {
+      ...player,
+      totalXp: newXp,
+      currentRank: newRank,
+      peakRank: newRank > player.peakRank ? newRank : player.peakRank
+    };
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'OPERATIVE_REWARDED_XP',
+      timestamp: new Date().toISOString(),
+      actorType: isHoC ? 'hoc' : 'admin',
+      details: `${isHoC ? 'Head of Command' : 'A-Rank Staff Officer'} (${admin?.displayName || adminUsername || 'Command'}) awarded +${rewardAmount} XP to ${player.displayName} (${xnId}). New XP: ${newXp} (${newRank} Rank). Reason: ${reason || 'Tactical excellence commendation'}`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    const { password: _, ...safePlayer } = dbPlayers[playerIndex];
+    res.json({
+      message: `Successfully granted +${rewardAmount} XP reward to ${player.displayName}.`,
+      player: safePlayer,
+      auditLog: log
+    });
+  });
+
+  // --- VITE MIDDLEWARE & STATIC SERVING ---
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa'
+    });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
@@ -564,7 +1101,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[XN Academy Backend] Server listening on http://0.0.0.0:${PORT} (Postgres-backed)`);
+    console.log(`[XN Academy Backend] Server listening on http://0.0.0.0:${PORT}`);
   });
 }
 

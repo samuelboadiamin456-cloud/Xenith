@@ -334,5 +334,67 @@ export const api = {
     } catch {
       return [];
     }
+  },
+
+  // --- HEAD OF COMMAND (HoC) SUPREME CONTROLS ---
+  async resetAllRanks(hocUsername?: string, reason?: string): Promise<{ message: string; resetCount: number; auditLog?: AuditLog }> {
+    const res = await fetch('/api/admin/hoc/reset-all-ranks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hocUsername, reason })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to execute network rank reset');
+    }
+
+    return await res.json();
+  },
+
+  async resetPlayerRank(xnId: string, hocUsername?: string, reason?: string): Promise<{ message: string; player: Player; auditLog?: AuditLog }> {
+    const res = await fetch('/api/admin/hoc/reset-player-rank', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xnId, hocUsername, reason })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to reset operative rank');
+    }
+
+    return await res.json();
+  },
+
+  async deductXp(xnId: string, amount: number, hocUsername?: string, reason?: string): Promise<{ message: string; player: Player; auditLog?: AuditLog }> {
+    const res = await fetch('/api/admin/hoc/deduct-xp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xnId, amount, hocUsername, reason })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to deduct operative XP');
+    }
+
+    return await res.json();
+  },
+
+  // --- ADMIN REWARD (50 XP) ---
+  async rewardPlayer(xnId: string, adminUsername: string, amount: number = 50, reason?: string): Promise<{ message: string; player: Player; auditLog?: AuditLog }> {
+    const res = await fetch('/api/admin/reward-player', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xnId, adminUsername, amount, reason })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to reward operative');
+    }
+
+    return await res.json();
   }
 };
