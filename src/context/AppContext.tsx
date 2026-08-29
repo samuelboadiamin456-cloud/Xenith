@@ -703,13 +703,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (result.auditLog) {
         setAuditLogs(prev => [result.auditLog!, ...prev]);
       }
-      showToast(`Submission ${submissionId} Approved (+${sub.scoreBreakdown.total} XP)`, 'success');
+      showToast(`Submission ${submissionId} Approved (+${sub.scoreBreakdown?.total ?? 0} XP)`, 'success');
       return;
     } catch {
       // Fallback
     }
 
-    const awardedXp = sub.scoreBreakdown.total;
+    const awardedXp = sub.scoreBreakdown?.total ?? 0;
     const targetPlayer = players.find(p => p.xnId === sub.xnId);
 
     setSubmissions(prev => prev.map(s => 
@@ -828,15 +828,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast(`Submission ${submissionId} Rejected`, 'error');
   };
 
-  // Compute admin stats
+  // Compute admin stats — guarded against any record missing nested
+  // fields (e.g. a malformed row), which previously crashed this
+  // computation (and the whole app, since it runs on every render)
+  // with "Cannot read properties of undefined".
   const adminStats: AdminStats = {
     totalPlayers: players.length,
-    activePlayers: players.filter(p => p.lifetimeStats.matches > 0).length,
+    activePlayers: players.filter(p => (p.lifetimeStats?.matches ?? 0) > 0).length,
     pendingSubmissions: submissions.filter(s => s.status === 'pending').length,
     flaggedSubmissions: submissions.filter(s => s.status === 'flagged').length,
     approvedSubmissions: submissions.filter(s => s.status === 'approved').length,
     rejectedSubmissions: submissions.filter(s => s.status === 'rejected').length,
-    totalXpAwarded: submissions.filter(s => s.status === 'approved').reduce((acc, s) => acc + s.scoreBreakdown.total, 0)
+    totalXpAwarded: submissions.filter(s => s.status === 'approved').reduce((acc, s) => acc + (s.scoreBreakdown?.total ?? 0), 0)
   };
 
   return (
