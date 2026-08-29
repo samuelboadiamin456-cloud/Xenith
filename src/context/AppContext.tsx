@@ -9,14 +9,11 @@ import {
   SubmissionStats, 
   AdminStats,
   AdminUser,
-  AdminRequest,
-  AppNotification,
-  AcademyEvent
+  AdminRequest
 } from '../types';
 import { INITIAL_PLAYERS, INITIAL_SUBMISSIONS, INITIAL_AUDIT_LOGS } from '../data/initialData';
 import { calculateRank, calculateSubmissionScore, RANK_CONFIGS } from '../data/rankConfigs';
 import { api, clearAdminToken } from '../services/api';
-import { notificationService } from '../services/notificationService';
 
 interface AppContextType {
   players: Player[];
@@ -38,71 +35,6 @@ interface AppContextType {
   openAuthModal: (mode?: 'login' | 'register' | 'admin-login' | 'admin-register') => void;
   closeAuthModal: () => void;
   
-  // Notifications & Device Alerts
-  notifications: AppNotification[];
-  unreadNotificationsCount: number;
-  notificationModalOpen: boolean;
-  openNotificationModal: () => void;
-  closeNotificationModal: () => void;
-  requestDeviceNotificationPermission: () => Promise<boolean>;
-  deviceNotificationPermission: NotificationPermission | 'unsupported';
-  sendNotification: (payload: {
-    recipientXnId?: string;
-    title: string;
-    message: string;
-    type?: AppNotification['type'];
-    priority?: AppNotification['priority'];
-    linkView?: string;
-  }) => Promise<AppNotification>;
-  markNotificationAsRead: (id: string) => Promise<void>;
-  markAllNotificationsAsRead: () => Promise<void>;
-  deleteNotification: (id: string) => Promise<void>;
-  refreshNotifications: () => Promise<void>;
-
-  // Academy Events
-  events: AcademyEvent[];
-  createEvent: (eventData: {
-    title: string;
-    eventType: AcademyEvent['eventType'];
-    description: string;
-    rewardXp: number;
-    scheduledDate: string;
-    targetRank?: string;
-    targetRole?: string;
-    broadcastPush?: boolean;
-  }) => Promise<AcademyEvent>;
-  deleteEvent: (id: string) => Promise<void>;
-  refreshEvents: () => Promise<void>;
-
-  // Academy Operations: Player Enrollment & Removal
-  addPlayerToAcademy: (playerData: {
-    displayName: string;
-    ign: string;
-    role: Player['role'];
-    email?: string;
-    username?: string;
-    country?: string;
-    bio?: string;
-    avatarUrl?: string;
-    initialXp?: number;
-    academyStatus?: Player['academyStatus'];
-    verificationStatus?: Player['verificationStatus'];
-    lifetimeStats?: Partial<Player['lifetimeStats']>;
-  }) => Promise<Player>;
-  removePlayerFromAcademy: (xnId: string, reason: string) => Promise<void>;
-
-  // Locked Telemetry Calibration
-  calibratePlayerTelemetry: (xnId: string, data: {
-    kills?: number;
-    wins?: number;
-    matches?: number;
-    kd?: number;
-    winRate?: number;
-    reportTicket?: string;
-    reason?: string;
-    recalculateXp?: boolean;
-  }) => Promise<Player>;
-
   // PWA Homescreen Installation
   installModalOpen: boolean;
   isInstallable: boolean;
@@ -151,14 +83,6 @@ interface AppContextType {
   approveAdminRequest: (requestId: string) => Promise<void>;
   rejectAdminRequest: (requestId: string) => Promise<void>;
   refreshAdminData: () => Promise<void>;
-  refreshPlayers: () => Promise<void>;
-  refreshAllData: () => Promise<void>;
-
-  // Head of Command & Admin Powers
-  resetAllRanks: (reason?: string) => Promise<void>;
-  resetPlayerRank: (xnId: string, reason?: string) => Promise<void>;
-  deductXp: (xnId: string, amount: number, reason?: string) => Promise<void>;
-  rewardPlayer: (xnId: string, amount?: number, reason?: string) => Promise<void>;
   
   // Submissions
   createSubmission: (stats: SubmissionStats, evidenceUrl?: string) => Promise<Submission>;
@@ -185,66 +109,38 @@ const STORAGE_KEY_ADMIN = 'xn_academy_is_admin_v1';
 const STORAGE_KEY_ADMIN_REQUESTS = 'xn_academy_admin_requests_v1';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const isDemoSeedPlayer = (p: Player) => {
-    if (!p) return true;
-    return p.id?.startsWith('p-seed-') || ['XN-001', 'XN-002', 'XN-003', 'XN-004', 'XN-005', 'XN-006'].includes(p.xnId) || ['vanguard_prime', 'cypher_99', 'apex_nova', 'ghost_pulse', 'aegis_core', 'strike_echo'].includes(p.username);
-  };
-
   const [players, setPlayers] = useState<Player[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_PLAYERS);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter(p => !isDemoSeedPlayer(p));
-        }
-      } catch {
-        return [];
-      }
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_PLAYERS);
+      return saved ? JSON.parse(saved) : INITIAL_PLAYERS;
+    } catch {
+      return INITIAL_PLAYERS;
     }
-    return [];
   });
 
   const [submissions, setSubmissions] = useState<Submission[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_SUBS);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((s: Submission) => !s.id?.startsWith('sub-9021') && !s.id?.startsWith('sub-8842') && !s.id?.startsWith('sub-7612'));
-        }
-      } catch {
-        return [];
-      }
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SUBS);
+      return saved ? JSON.parse(saved) : INITIAL_SUBMISSIONS;
+    } catch {
+      return INITIAL_SUBMISSIONS;
     }
-    return [];
   });
 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_LOGS);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((l: AuditLog) => !l.id?.startsWith('log-seed-'));
-        }
-      } catch {
-        return [];
-      }
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_LOGS);
+      return saved ? JSON.parse(saved) : INITIAL_AUDIT_LOGS;
+    } catch {
+      return INITIAL_AUDIT_LOGS;
     }
-    return [];
   });
 
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_USER);
     if (saved) {
       try {
-        const parsed = JSON.parse(saved);
-        if (isDemoSeedPlayer(parsed)) {
-          localStorage.removeItem(STORAGE_KEY_USER);
-          return null;
-        }
-        return parsed;
+        return JSON.parse(saved);
       } catch {
         return null;
       }
@@ -290,20 +186,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'admin-login' | 'admin-register'>('register');
-
-  // Notifications and Events State
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [events, setEvents] = useState<AcademyEvent[]>([]);
-  const [notificationModalOpen, setNotificationModalOpen] = useState<boolean>(false);
-  const [deviceNotificationPermission, setDeviceNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() => {
-    return notificationService.getPermission();
-  });
-
-  const unreadNotificationsCount = notifications.filter(n => {
-    if (n.read) return false;
-    if (!n.recipientXnId) return true; // Global broadcast
-    return currentPlayer?.xnId === n.recipientXnId;
-  }).length;
 
   // PWA State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -384,7 +266,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         api.getAdminStatus(),
         api.getAdminRequests()
       ]);
-      if (status) setAdminStatus(status);
+      setAdminStatus(status);
       if (requests && requests.length >= 0) {
         setAdminRequests(requests);
       }
@@ -393,171 +275,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Full Database State Synchronization (across PC and Mobile)
-  const refreshAllData = async () => {
-    try {
-      const state = await api.getFullState();
-      if (state) {
-        if (Array.isArray(state.players)) {
-          setPlayers(state.players);
-          // Keep current player profile synchronized with server authoritative state
-          setCurrentPlayer(prev => {
-            if (!prev) return null;
-            const updated = state.players.find(
-              p => p.xnId.toLowerCase() === prev.xnId.toLowerCase() || (p.username && prev.username && p.username.toLowerCase() === prev.username.toLowerCase())
-            );
-            return updated || prev;
-          });
-        }
-        if (Array.isArray(state.submissions)) {
-          setSubmissions(state.submissions);
-        }
-        if (Array.isArray(state.auditLogs)) {
-          setAuditLogs(state.auditLogs);
-        }
-        if (state.adminStatus) {
-          setAdminStatus(state.adminStatus);
-        }
-        if (Array.isArray(state.adminRequests)) {
-          setAdminRequests(state.adminRequests);
-        }
-        if (Array.isArray(state.notifications)) {
-          setNotifications(state.notifications);
-        }
-        if (Array.isArray(state.events)) {
-          setEvents(state.events);
-        }
-      }
-    } catch (err) {
-      console.warn('[XN Sync] Real-time sync error:', err);
-    }
-  };
-
-  // Continuous Real-Time Cross-Device Synchronization Engine
+  // Initial Fetch & Sync from Backend APIs
   useEffect(() => {
+    // One-time cleanup: earlier versions mirrored full submissions
+    // (including base64 evidence images) into localStorage on every
+    // change, which eventually exceeds the browser's ~5-10MB quota
+    // and crashes the app. The database is the real source of truth
+    // now, so these cached copies are dead weight — clear them.
+    try {
+      localStorage.removeItem(STORAGE_KEY_PLAYERS);
+      localStorage.removeItem(STORAGE_KEY_SUBS);
+      localStorage.removeItem(STORAGE_KEY_LOGS);
+    } catch {
+      // ignore — storage may be unavailable (private browsing, etc.)
+    }
+
     let isMounted = true;
-    let initialBootstrapDone = false;
-
-    const performSync = async () => {
+    const fetchBackendData = async () => {
       try {
-        const state = await api.getFullState();
-        if (!isMounted) return;
+        const [serverPlayers, serverSubs, serverLogs, status, requests] = await Promise.all([
+          api.getPlayers(),
+          api.getSubmissions(),
+          api.getAuditLogs(),
+          api.getAdminStatus(),
+          api.getAdminRequests()
+        ]);
 
-        if (state) {
-          // If this is the initial run, check if local storage had custom players not yet on server
-          if (!initialBootstrapDone) {
-            initialBootstrapDone = true;
-            const localSavedPlayersRaw = localStorage.getItem(STORAGE_KEY_PLAYERS);
-            const localSavedSubsRaw = localStorage.getItem(STORAGE_KEY_SUBS);
-            
-            if (localSavedPlayersRaw || localSavedSubsRaw) {
-              try {
-                const rawPlayers: Player[] = localSavedPlayersRaw ? JSON.parse(localSavedPlayersRaw) : [];
-                const rawSubs: Submission[] = localSavedSubsRaw ? JSON.parse(localSavedSubsRaw) : [];
-                
-                const localPlayers = rawPlayers.filter(p => !isDemoSeedPlayer(p));
-                const localSubs = rawSubs.filter(s => !s.id?.startsWith('sub-9021') && !s.id?.startsWith('sub-8842') && !s.id?.startsWith('sub-7612'));
-                
-                const hasNewPlayers = localPlayers.some(lp => lp.xnId && !state.players.some(sp => sp.xnId.toLowerCase() === lp.xnId.toLowerCase()));
-                const hasNewSubs = localSubs.some(ls => ls.id && !state.submissions.some(ss => ss.id === ls.id));
-                
-                if (hasNewPlayers || hasNewSubs) {
-                  const mergeResult = await api.clientMergeSync({
-                    players: localPlayers,
-                    submissions: localSubs
-                  });
-                  if (mergeResult && isMounted) {
-                    setPlayers(mergeResult.players);
-                    setSubmissions(mergeResult.submissions);
-                    setAuditLogs(mergeResult.auditLogs);
-                    setNotifications(mergeResult.notifications);
-                    setEvents(mergeResult.events);
-                    return;
-                  }
-                }
-              } catch (e) {
-                console.warn('[Storage Reconciliation]', e);
-              }
-            }
+        if (isMounted) {
+          if (serverPlayers && serverPlayers.length > 0) {
+            setPlayers(serverPlayers);
           }
-
-          // Authoritative Server State Sync
-          if (Array.isArray(state.players)) {
-            setPlayers(state.players);
-            setCurrentPlayer(prev => {
-              if (!prev) return null;
-              const updated = state.players.find(
-                p => p.xnId.toLowerCase() === prev.xnId.toLowerCase() || (p.username && prev.username && p.username.toLowerCase() === prev.username.toLowerCase())
-              );
-              return updated || prev;
-            });
+          if (serverSubs && serverSubs.length > 0) {
+            setSubmissions(serverSubs);
           }
-          if (Array.isArray(state.submissions)) {
-            setSubmissions(state.submissions);
+          if (serverLogs && serverLogs.length > 0) {
+            setAuditLogs(serverLogs);
           }
-          if (Array.isArray(state.auditLogs)) {
-            setAuditLogs(state.auditLogs);
+          if (status) {
+            setAdminStatus(status);
           }
-          if (state.adminStatus) {
-            setAdminStatus(state.adminStatus);
-          }
-          if (Array.isArray(state.adminRequests)) {
-            setAdminRequests(state.adminRequests);
-          }
-          if (Array.isArray(state.notifications)) {
-            setNotifications(state.notifications);
-          }
-          if (Array.isArray(state.events)) {
-            setEvents(state.events);
+          if (requests) {
+            setAdminRequests(requests);
           }
         }
       } catch (err) {
-        console.warn('[XN Protocol] Backend sync note:', err);
+        console.warn('[XN Protocol] Backend API sync note:', err);
       }
     };
 
-    // Immediate initial fetch
-    performSync();
-
-    // Periodic fast background synchronization (every 3.5 seconds)
-    const intervalId = setInterval(performSync, 3500);
-
-    // Synchronize immediately when window or tab gains focus or becomes visible
-    const handleFocus = () => {
-      performSync();
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        performSync();
-      }
-    };
-
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('online', handleFocus);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
+    fetchBackendData();
     return () => {
       isMounted = false;
-      clearInterval(intervalId);
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('online', handleFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
-  // Save to localStorage
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_PLAYERS, JSON.stringify(players));
-  }, [players]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_SUBS, JSON.stringify(submissions));
-  }, [submissions]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(auditLogs));
-  }, [auditLogs]);
+  // players, submissions, and audit logs are no longer mirrored to
+  // localStorage — they come from the database via the API fetch
+  // above. Submissions in particular carry full evidence images,
+  // which reliably exceeded the browser storage quota and crashed
+  // the app (see cleanup effect above).
 
   useEffect(() => {
     if (currentPlayer) {
@@ -743,97 +519,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const refreshPlayers = async () => {
-    try {
-      const serverPlayers = await api.getPlayers();
-      if (serverPlayers && serverPlayers.length > 0) {
-        setPlayers(serverPlayers);
-      }
-    } catch (err) {
-      console.warn('[Refresh Players]', err);
-    }
-  };
-
-  // Head of Command: Reset ALL Operative Ranks across network
-  const resetAllRanks = async (reason?: string) => {
-    try {
-      const res = await api.resetAllRanks(currentAdmin?.username, reason);
-      setPlayers(prev => prev.map(p => ({
-        ...p,
-        totalXp: 0,
-        currentRank: 'E'
-      })));
-      if (currentPlayer) {
-        setCurrentPlayer(prev => prev ? { ...prev, totalXp: 0, currentRank: 'E' } : null);
-      }
-      if (res.auditLog) {
-        setAuditLogs(prev => [res.auditLog!, ...prev]);
-      }
-      showToast(res.message || 'All operative ranks successfully reset to Rank E (0 XP).', 'success');
-      await refreshPlayers();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to reset all ranks', 'error');
-      throw err;
-    }
-  };
-
-  // Head of Command: Reset Individual Operative Rank
-  const resetPlayerRank = async (xnId: string, reason?: string) => {
-    try {
-      const res = await api.resetPlayerRank(xnId, currentAdmin?.username, reason);
-      setPlayers(prev => prev.map(p => p.xnId.toLowerCase() === xnId.toLowerCase() ? res.player : p));
-      if (currentPlayer?.xnId.toLowerCase() === xnId.toLowerCase()) {
-        setCurrentPlayer(res.player);
-      }
-      if (res.auditLog) {
-        setAuditLogs(prev => [res.auditLog!, ...prev]);
-      }
-      showToast(res.message || `Operative ${xnId} rank reset to Rank E (0 XP).`, 'success');
-      await refreshPlayers();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to reset player rank', 'error');
-      throw err;
-    }
-  };
-
-  // Head of Command: Deduct XP from Operative
-  const deductXp = async (xnId: string, amount: number, reason?: string) => {
-    try {
-      const res = await api.deductXp(xnId, amount, currentAdmin?.username, reason);
-      setPlayers(prev => prev.map(p => p.xnId.toLowerCase() === xnId.toLowerCase() ? res.player : p));
-      if (currentPlayer?.xnId.toLowerCase() === xnId.toLowerCase()) {
-        setCurrentPlayer(res.player);
-      }
-      if (res.auditLog) {
-        setAuditLogs(prev => [res.auditLog!, ...prev]);
-      }
-      showToast(res.message || `Deducted ${amount} XP from ${xnId}.`, 'success');
-      await refreshPlayers();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to deduct XP', 'error');
-      throw err;
-    }
-  };
-
-  // Admin Reward (+50 XP) - Unlocked for Admins crossing A-Rank or HoC
-  const rewardPlayer = async (xnId: string, amount: number = 50, reason?: string) => {
-    try {
-      const res = await api.rewardPlayer(xnId, currentAdmin?.username || 'Command', amount, reason);
-      setPlayers(prev => prev.map(p => p.xnId.toLowerCase() === xnId.toLowerCase() ? res.player : p));
-      if (currentPlayer?.xnId.toLowerCase() === xnId.toLowerCase()) {
-        setCurrentPlayer(res.player);
-      }
-      if (res.auditLog) {
-        setAuditLogs(prev => [res.auditLog!, ...prev]);
-      }
-      showToast(res.message || `Awarded +${amount} XP reward to ${xnId}!`, 'success');
-      await refreshPlayers();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to reward operative', 'error');
-      throw err;
-    }
-  };
-
   const logout = () => {
     setCurrentPlayer(null);
     setCurrentAdmin(null);
@@ -946,9 +631,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     // Fraud checks
     const fraudFlags: string[] = [];
-    if (stats.kd && stats.kd > 15.0) fraudFlags.push('Extreme K/D Anomaly (>15.0)');
-    if (stats.kills && stats.kills > 35) fraudFlags.push('Unusually High Kill Count (>35 kills in single match)');
-    if (stats.winRate && stats.winRate > 95 && (stats.matches || 1) > 5) fraudFlags.push('Unusually High Win Rate (>95%)');
+    if (stats.kd > 12.0) fraudFlags.push('Extreme K/D Anomaly (>12.0)');
+    if (stats.hs > 85.0) fraudFlags.push('Abnormal Headshot Ratio (>85%)');
+    if (stats.winRate > 95 && stats.matches > 5) fraudFlags.push('Unusually High Win Rate (>95%)');
 
     try {
       if (player) {
@@ -957,7 +642,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           playerName: player.displayName,
           playerIgn: player.ign,
           stats,
-          mode: stats.mode || 'BR',
           evidenceUrl
         });
 
@@ -966,7 +650,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (result.auditLog) {
           setAuditLogs(prev => [result.auditLog!, ...prev]);
         }
-        showToast(`SITREP ${newSub.id} [${stats.mode || 'BR'}] submitted (+${score.total} XP pending review)`, 'success');
+        showToast(`SITREP ${newSub.id} submitted to review queue`, 'success');
         return newSub;
       }
     } catch {
@@ -981,7 +665,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
       status: fraudFlags.length > 0 ? 'flagged' : 'pending',
       stats,
-      mode: stats.mode || 'BR',
       evidenceUrl: evidenceUrl || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800&auto=format&fit=crop',
       fraudFlags,
       scoreBreakdown: score
@@ -994,11 +677,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       action: fraudFlags.length > 0 ? 'SITREP_FLAGGED' : 'SITREP_SUBMITTED',
       timestamp: new Date().toISOString(),
       actorType: 'system',
-      details: `${newSub.id} [${stats.mode || 'BR'}] from ${newSub.playerName} (${newSub.xnId}) queued for review. ${fraudFlags.length ? `Flags: ${fraudFlags.join(', ')}` : ''}`
+      details: `${newSub.id} from ${newSub.playerName} (${newSub.xnId}) queued for review. ${fraudFlags.length ? `Flags: ${fraudFlags.join(', ')}` : ''}`
     };
     setAuditLogs(prev => [log, ...prev]);
 
-    showToast(`SITREP ${newSub.id} [${stats.mode || 'BR'}] submitted (+${score.total} XP pending review)`, 'success');
+    showToast(`SITREP ${newSub.id} submitted to review queue`, 'success');
     return newSub;
   };
 
@@ -1145,221 +828,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast(`Submission ${submissionId} Rejected`, 'error');
   };
 
-  // --- ACADEMY OPERATIONS: ADD & REMOVE OPERATIVES ---
-  const addPlayerToAcademy = async (playerData: {
-    displayName: string;
-    ign: string;
-    role: Player['role'];
-    email?: string;
-    username?: string;
-    country?: string;
-    bio?: string;
-    avatarUrl?: string;
-    initialXp?: number;
-    academyStatus?: Player['academyStatus'];
-    verificationStatus?: Player['verificationStatus'];
-    lifetimeStats?: Partial<Player['lifetimeStats']>;
-  }): Promise<Player> => {
-    try {
-      const res = await api.addPlayerToAcademy({
-        ...playerData,
-        adminUsername: currentAdmin?.displayName || currentAdmin?.username || 'Command'
-      });
-      setPlayers(prev => [res.player, ...prev]);
-      if (res.auditLog) {
-        setAuditLogs(prev => [res.auditLog!, ...prev]);
-      }
-      showToast(`Operative ${res.player.displayName} (${res.player.xnId}) enrolled`, 'success');
-      refreshNotifications();
-      return res.player;
-    } catch (err: any) {
-      showToast(err.message || 'Failed to add operative', 'error');
-      throw err;
-    }
-  };
-
-  const removePlayerFromAcademy = async (xnId: string, reason: string) => {
-    try {
-      const res = await api.removePlayerFromAcademy(
-        xnId,
-        reason,
-        currentAdmin?.displayName || currentAdmin?.username || 'Command'
-      );
-      setPlayers(prev => prev.filter(p => p.xnId !== xnId));
-      if (res.auditLog) {
-        setAuditLogs(prev => [res.auditLog!, ...prev]);
-      }
-      if (currentPlayer?.xnId === xnId) {
-        logout();
-      }
-      showToast(`Operative ${xnId} removed from Academy roster`, 'info');
-      refreshNotifications();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to remove operative', 'error');
-      throw err;
-    }
-  };
-
-  // --- LOCKED TELEMETRY CALIBRATION ---
-  const calibratePlayerTelemetry = async (xnId: string, data: {
-    kills?: number;
-    wins?: number;
-    matches?: number;
-    kd?: number;
-    winRate?: number;
-    reportTicket?: string;
-    reason?: string;
-    recalculateXp?: boolean;
-  }): Promise<Player> => {
-    try {
-      const res = await api.calibratePlayerTelemetry(xnId, {
-        ...data,
-        adminUsername: currentAdmin?.displayName || currentAdmin?.username || 'Academy_Staff'
-      });
-      setPlayers(prev => prev.map(p => p.xnId === xnId ? res.player : p));
-      if (currentPlayer?.xnId === xnId) {
-        setCurrentPlayer(res.player);
-      }
-      if (res.auditLog) {
-        setAuditLogs(prev => [res.auditLog!, ...prev]);
-      }
-      if (res.notification) {
-        setNotifications(prev => [res.notification!, ...prev]);
-        notificationService.sendDeviceNotification(res.notification.title, {
-          body: res.notification.message
-        });
-      }
-      showToast(`Telemetry calibrated for ${res.player.displayName} (${xnId})`, 'success');
-      return res.player;
-    } catch (err: any) {
-      showToast(err.message || 'Telemetry calibration failed', 'error');
-      throw err;
-    }
-  };
-
-  // --- NOTIFICATION MANAGEMENT & DEVICE PUSH ---
-  const refreshNotifications = async () => {
-    try {
-      const notifs = await api.getNotifications(currentPlayer?.xnId);
-      setNotifications(notifs);
-    } catch (err) {
-      console.warn('Failed to refresh notifications:', err);
-    }
-  };
-
-  const openNotificationModal = () => setNotificationModalOpen(true);
-  const closeNotificationModal = () => setNotificationModalOpen(false);
-
-  const requestDeviceNotificationPermission = async (): Promise<boolean> => {
-    const perm = await notificationService.requestPermission();
-    setDeviceNotificationPermission(perm);
-    if (perm === 'granted') {
-      showToast('Device push notifications enabled', 'success');
-      return true;
-    } else {
-      showToast('Notification permission declined', 'info');
-      return false;
-    }
-  };
-
-  const sendNotification = async (payload: {
-    recipientXnId?: string;
-    title: string;
-    message: string;
-    type?: AppNotification['type'];
-    priority?: AppNotification['priority'];
-    linkView?: string;
-  }): Promise<AppNotification> => {
-    try {
-      const res = await api.sendNotification({
-        ...payload,
-        sender: currentAdmin?.displayName || 'Academy Command'
-      });
-      setNotifications(prev => [res.notification, ...prev]);
-      if (res.auditLog) {
-        setAuditLogs(prev => [res.auditLog!, ...prev]);
-      }
-      // Trigger instant browser device alert
-      notificationService.sendDeviceNotification(res.notification.title, {
-        body: res.notification.message
-      });
-      showToast('Notification broadcasted to player devices', 'success');
-      return res.notification;
-    } catch (err: any) {
-      showToast(err.message || 'Failed to dispatch notification', 'error');
-      throw err;
-    }
-  };
-
-  const markNotificationAsRead = async (id: string) => {
-    await api.markNotificationAsRead(id);
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  };
-
-  const markAllNotificationsAsRead = async () => {
-    await api.markAllNotificationsAsRead(currentPlayer?.xnId);
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    showToast('All notifications marked as read', 'info');
-  };
-
-  const deleteNotification = async (id: string) => {
-    await api.deleteNotification(id);
-    setNotifications(prev => prev.filter(n => n.id !== id));
-  };
-
-  // --- ACADEMY EVENTS ---
-  const refreshEvents = async () => {
-    try {
-      const evs = await api.getEvents();
-      setEvents(evs);
-    } catch (err) {
-      console.warn('Failed to refresh events:', err);
-    }
-  };
-
-  const createEvent = async (eventData: {
-    title: string;
-    eventType: AcademyEvent['eventType'];
-    description: string;
-    rewardXp: number;
-    scheduledDate: string;
-    targetRank?: string;
-    targetRole?: string;
-    broadcastPush?: boolean;
-  }): Promise<AcademyEvent> => {
-    try {
-      const res = await api.createEvent({
-        ...eventData,
-        createdBy: currentAdmin?.displayName || 'Academy Command'
-      });
-      setEvents(prev => [res.event, ...prev]);
-      if (res.auditLog) {
-        setAuditLogs(prev => [res.auditLog!, ...prev]);
-      }
-      if (eventData.broadcastPush) {
-        notificationService.sendDeviceNotification(`NEW EVENT: ${res.event.title}`, {
-          body: `${res.event.description} (+${res.event.rewardXp} XP Reward)`
-        });
-      }
-      showToast(`Academy event "${res.event.title}" published!`, 'success');
-      refreshNotifications();
-      return res.event;
-    } catch (err: any) {
-      showToast(err.message || 'Failed to create event', 'error');
-      throw err;
-    }
-  };
-
-  const deleteEvent = async (id: string) => {
-    try {
-      await api.deleteEvent(id, currentAdmin?.displayName);
-      setEvents(prev => prev.filter(e => e.id !== id));
-      showToast('Event removed from Academy schedule', 'info');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete event', 'error');
-    }
-  };
-
   // Compute admin stats
   const adminStats: AdminStats = {
     totalPlayers: players.length,
@@ -1392,33 +860,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         authModalMode,
         openAuthModal,
         closeAuthModal,
-
-        // Notifications
-        notifications,
-        unreadNotificationsCount,
-        notificationModalOpen,
-        openNotificationModal,
-        closeNotificationModal,
-        requestDeviceNotificationPermission,
-        deviceNotificationPermission,
-        sendNotification,
-        markNotificationAsRead,
-        markAllNotificationsAsRead,
-        deleteNotification,
-        refreshNotifications,
-
-        // Events
-        events,
-        createEvent,
-        deleteEvent,
-        refreshEvents,
-
-        // Academy Operations
-        addPlayerToAcademy,
-        removePlayerFromAcademy,
-        calibratePlayerTelemetry,
-
-        // PWA
         installModalOpen,
         isInstallable,
         isAppInstalled,
@@ -1435,12 +876,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         approveAdminRequest,
         rejectAdminRequest,
         refreshAdminData,
-        refreshPlayers,
-        refreshAllData,
-        resetAllRanks,
-        resetPlayerRank,
-        deductXp,
-        rewardPlayer,
         logout,
         registerPlayer,
         updateProfile,
