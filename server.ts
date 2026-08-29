@@ -151,366 +151,63 @@ let dbAdminRequests: AdminRequest[] = [];
 let dbNotifications: AppNotification[] = [];
 let dbEvents: AcademyEvent[] = [];
 
-// Seed initial default data if storage is empty
-const INITIAL_PLAYERS_SEED: Player[] = [
-  {
-    id: 'p-seed-1',
-    xnId: 'XN-001',
-    username: 'vanguard_prime',
-    email: 'vanguard@xn-academy.gg',
-    displayName: 'Vanguard Prime',
-    ign: 'VANGUARD_X',
-    role: 'IGL',
-    country: 'United Kingdom',
-    bio: 'Founding member of the XN Academy Vanguard cadre. Tactical in-game leader specializing in high-pressure team rotations and site control.',
-    avatarUrl: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?q=80&w=400&auto=format&fit=crop',
-    currentRank: 'S-MAX',
-    peakRank: 'S-MAX',
-    totalXp: 18500,
-    academyStatus: 'Vanguard Legend',
-    verificationStatus: 'Official Vanguard',
-    joinedAt: '2026-01-10T10:00:00.000Z',
-    lifetimeStats: {
-      kills: 4820,
-      wins: 412,
-      matches: 460,
-      kd: 4.85,
-      winRate: 89.6
-    }
-  },
-  {
-    id: 'p-seed-2',
-    xnId: 'XN-002',
-    username: 'cypher_99',
-    email: 'cypher@xn-academy.gg',
-    displayName: 'Cipher Mark',
-    ign: 'CYPHER_99',
-    role: 'Sniper',
-    country: 'United States',
-    bio: 'Precision long-range recon specialist. Master of long-distance angle defense and target neutralizations.',
-    avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=400&auto=format&fit=crop',
-    currentRank: 'S',
-    peakRank: 'S',
-    totalXp: 12400,
-    academyStatus: 'Elite Operative',
-    verificationStatus: 'Official Vanguard',
-    joinedAt: '2026-01-18T14:30:00.000Z',
-    lifetimeStats: {
-      kills: 3420,
-      wins: 285,
-      matches: 340,
-      kd: 4.10,
-      winRate: 83.8
-    }
-  },
-  {
-    id: 'p-seed-3',
-    xnId: 'XN-003',
-    username: 'apex_nova',
-    email: 'nova@xn-academy.gg',
-    displayName: 'Apex Nova',
-    ign: 'APEX_NOVA',
-    role: 'Rusher',
-    country: 'Canada',
-    bio: 'High-tempo aggressive entry fragger. Focused on initial bomb-site breach, space creation, and close-quarters engagements.',
-    avatarUrl: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?q=80&w=400&auto=format&fit=crop',
-    currentRank: 'A',
-    peakRank: 'A',
-    totalXp: 8150,
-    academyStatus: 'Senior Specialist',
-    verificationStatus: 'Verified',
-    joinedAt: '2026-02-01T08:15:00.000Z',
-    lifetimeStats: {
-      kills: 2650,
-      wins: 194,
-      matches: 250,
-      kd: 3.65,
-      winRate: 77.6
-    }
-  },
-  {
-    id: 'p-seed-4',
-    xnId: 'XN-004',
-    username: 'ghost_pulse',
-    email: 'ghost@xn-academy.gg',
-    displayName: 'Ghost Recon',
-    ign: 'GHOST_PULSE',
-    role: 'Fragger',
-    country: 'Germany',
-    bio: 'Secondary assault operative providing crossfire coverage, aggressive trade frags, and post-plant defense.',
-    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=400&auto=format&fit=crop',
-    currentRank: 'B',
-    peakRank: 'B',
-    totalXp: 4450,
-    academyStatus: 'Member',
-    verificationStatus: 'Verified',
-    joinedAt: '2026-02-12T16:45:00.000Z',
-    lifetimeStats: {
-      kills: 1820,
-      wins: 120,
-      matches: 165,
-      kd: 3.15,
-      winRate: 72.7
-    }
-  },
-  {
-    id: 'p-seed-5',
-    xnId: 'XN-005',
-    username: 'aegis_core',
-    email: 'aegis@xn-academy.gg',
-    displayName: 'Aegis Shield',
-    ign: 'AEGIS_CORE',
-    role: 'Support',
-    country: 'Sweden',
-    bio: 'Utility coordinator and smoke execution anchor. Secures defensive cross angles and guarantees round resets.',
-    avatarUrl: 'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?q=80&w=400&auto=format&fit=crop',
-    currentRank: 'C',
-    peakRank: 'C',
-    totalXp: 2600,
-    academyStatus: 'Member',
-    verificationStatus: 'Verified',
-    joinedAt: '2026-02-20T11:20:00.000Z',
-    lifetimeStats: {
-      kills: 1140,
-      wins: 88,
-      matches: 125,
-      kd: 2.45,
-      winRate: 70.4
-    }
-  },
-  {
-    id: 'p-seed-6',
-    xnId: 'XN-006',
-    username: 'strike_echo',
-    email: 'strike@xn-academy.gg',
-    displayName: 'Strike Echo',
-    ign: 'STRIKE_7',
-    role: 'Flex',
-    country: 'Australia',
-    bio: 'Adaptable multi-role operative capable of shifting between anchor and second entry based on tactical calls.',
-    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=400&auto=format&fit=crop',
-    currentRank: 'D',
-    peakRank: 'D',
-    totalXp: 1450,
-    academyStatus: 'Cadet',
-    verificationStatus: 'Verified',
-    joinedAt: '2026-03-01T09:00:00.000Z',
-    lifetimeStats: {
-      kills: 720,
-      wins: 42,
-      matches: 70,
-      kd: 2.10,
-      winRate: 60.0
-    }
-  }
-];
-
-const INITIAL_SUBMISSIONS_SEED: Submission[] = [
-  {
-    id: 'sub-9021',
-    xnId: 'XN-001',
-    playerName: 'Vanguard Prime',
-    playerIgn: 'VANGUARD_X',
-    createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-    status: 'approved',
-    stats: {
-      kills: 24,
-      wins: 1,
-      matches: 1,
-      kd: 4.80,
-      winRate: 100
-    },
-    evidenceUrl: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800&auto=format&fit=crop',
-    fraudFlags: [],
-    scoreBreakdown: {
-      killsXp: 120,
-      winBonus: 25,
-      kdBonus: 72,
-      total: 217
-    },
-    reviewedBy: 'Head of Command',
-    reviewedAt: new Date(Date.now() - 3600000 * 1.5).toISOString()
-  },
-  {
-    id: 'sub-8842',
-    xnId: 'XN-002',
-    playerName: 'Cipher Mark',
-    playerIgn: 'CYPHER_99',
-    createdAt: new Date(Date.now() - 3600000 * 6).toISOString(),
-    status: 'approved',
-    stats: {
-      kills: 18,
-      wins: 1,
-      matches: 1,
-      kd: 4.50,
-      winRate: 100
-    },
-    evidenceUrl: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?q=80&w=800&auto=format&fit=crop',
-    fraudFlags: [],
-    scoreBreakdown: {
-      killsXp: 90,
-      winBonus: 25,
-      kdBonus: 68,
-      total: 183
-    },
-    reviewedBy: 'Staff Officer',
-    reviewedAt: new Date(Date.now() - 3600000 * 5).toISOString()
-  },
-  {
-    id: 'sub-7612',
-    xnId: 'XN-003',
-    playerName: 'Apex Nova',
-    playerIgn: 'APEX_NOVA',
-    createdAt: new Date(Date.now() - 3600000 * 18).toISOString(),
-    status: 'approved',
-    stats: {
-      kills: 22,
-      wins: 1,
-      matches: 1,
-      kd: 3.67,
-      winRate: 100
-    },
-    evidenceUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=800&auto=format&fit=crop',
-    fraudFlags: [],
-    scoreBreakdown: {
-      killsXp: 110,
-      winBonus: 25,
-      kdBonus: 55,
-      total: 190
-    },
-    reviewedBy: 'Staff Officer',
-    reviewedAt: new Date(Date.now() - 3600000 * 17).toISOString()
-  }
-];
-
-const INITIAL_AUDIT_LOGS_SEED: AuditLog[] = [
-  {
-    id: 'log-seed-1',
-    action: 'ACADEMY_SYSTEM_ONLINE',
-    timestamp: new Date(Date.now() - 3600000 * 48).toISOString(),
-    actorType: 'system',
-    details: 'Official XN Academy competitive telemetry network booted with synchronized database.'
-  },
-  {
-    id: 'log-seed-2',
-    action: 'SITREP_APPROVED',
-    timestamp: new Date(Date.now() - 3600000 * 2).toISOString(),
-    actorType: 'admin',
-    details: 'SITREP sub-9021 (Vanguard Prime - XN-001) verified and approved (+217 XP awarded).'
-  }
-];
-
-// Seed initial default events and notifications if storage is empty
-const INITIAL_NOTIFICATIONS_SEED: AppNotification[] = [
-  {
-    id: 'notif-seed-1',
-    recipientXnId: 'ALL',
-    title: 'ACADEMY COMMAND NETWORK ONLINE',
-    message: 'Welcome to the official XN Academy Network. Match SITREP submission and rank calibrations are live.',
-    type: 'system',
-    priority: 'normal',
-    createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-    read: false,
-    linkView: 'leaderboard',
-    sender: 'Head of Command'
-  },
-  {
-    id: 'notif-seed-2',
-    recipientXnId: 'ALL',
-    title: 'VANGUARD INVITATIONAL ANNOUNCED',
-    message: 'New season competitive championship bracket has been scheduled. Check Academy Operations for tournament rules.',
-    type: 'event',
-    priority: 'urgent',
-    createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
-    read: false,
-    linkView: 'operations',
-    sender: 'Head of Command'
-  }
-];
-
-const INITIAL_EVENTS_SEED: AcademyEvent[] = [
-  {
-    id: 'event-seed-1',
-    title: 'VANGUARD INVITATIONAL 2026',
-    eventType: 'TOURNAMENT',
-    description: 'Premier seasonal championship. Double elimination tactical bracket for all registered academy operatives.',
-    rewardXp: 500,
-    scheduledDate: '2026-09-12 18:00 UTC',
-    targetRank: 'ALL',
-    targetRole: 'ALL',
-    createdBy: 'Head of Command',
-    createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-    isActive: true
-  },
-  {
-    id: 'event-seed-2',
-    title: 'DOUBLE XP TELEMETRY DRILL',
-    eventType: 'DOUBLE_XP',
-    description: 'Special weekend operation: verified match SITREPs receive 2x XP multipliers across all verified queues.',
-    rewardXp: 300,
-    scheduledDate: '2026-09-05 14:00 UTC',
-    targetRank: 'ALL',
-    targetRole: 'ALL',
-    createdBy: 'Head of Command',
-    createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-    isActive: true
-  },
-  {
-    id: 'event-seed-3',
-    title: 'SNIPER RECON & TARGETING TRIALS',
-    eventType: 'TRIALS',
-    description: 'Precision marksmanship and long-range engagement trials. Dedicated commendations awarded for high K/D performances.',
-    rewardXp: 250,
-    scheduledDate: '2026-09-02 20:00 UTC',
-    targetRank: 'ALL',
-    targetRole: 'Sniper',
-    createdBy: 'Head of Command',
-    createdAt: new Date(Date.now() - 3600000 * 6).toISOString(),
-    isActive: true
-  }
-];
-
 // Load Database from disk on startup
 function loadDatabase() {
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
       const data = JSON.parse(raw);
-      if (Array.isArray(data.players) && data.players.length > 0) dbPlayers = data.players;
-      else dbPlayers = [...INITIAL_PLAYERS_SEED];
+      if (Array.isArray(data.players)) {
+        // Filter out any lingering seed records if present
+        dbPlayers = data.players.filter((p: Player) => !p.id?.startsWith('p-seed-') && p.xnId !== 'XN-001' && p.xnId !== 'XN-002' && p.xnId !== 'XN-003' && p.xnId !== 'XN-004' && p.xnId !== 'XN-005' && p.xnId !== 'XN-006');
+      } else {
+        dbPlayers = [];
+      }
 
-      if (Array.isArray(data.submissions) && data.submissions.length > 0) dbSubmissions = data.submissions;
-      else dbSubmissions = [...INITIAL_SUBMISSIONS_SEED];
+      if (Array.isArray(data.submissions)) {
+        dbSubmissions = data.submissions.filter((s: Submission) => !s.id?.startsWith('sub-9021') && !s.id?.startsWith('sub-8842') && !s.id?.startsWith('sub-7612'));
+      } else {
+        dbSubmissions = [];
+      }
 
-      if (Array.isArray(data.auditLogs) && data.auditLogs.length > 0) dbAuditLogs = data.auditLogs;
-      else dbAuditLogs = [...INITIAL_AUDIT_LOGS_SEED];
+      if (Array.isArray(data.auditLogs)) {
+        dbAuditLogs = data.auditLogs.filter((l: AuditLog) => !l.id?.startsWith('log-seed-'));
+      } else {
+        dbAuditLogs = [];
+      }
 
       if (Array.isArray(data.admins)) dbAdmins = data.admins;
       if (Array.isArray(data.adminRequests)) dbAdminRequests = data.adminRequests;
 
-      if (Array.isArray(data.notifications) && data.notifications.length > 0) dbNotifications = data.notifications;
-      else dbNotifications = [...INITIAL_NOTIFICATIONS_SEED];
+      if (Array.isArray(data.notifications)) {
+        dbNotifications = data.notifications.filter((n: AppNotification) => !n.id?.startsWith('notif-seed-'));
+      } else {
+        dbNotifications = [];
+      }
 
-      if (Array.isArray(data.events) && data.events.length > 0) dbEvents = data.events;
-      else dbEvents = [...INITIAL_EVENTS_SEED];
+      if (Array.isArray(data.events)) {
+        dbEvents = data.events.filter((e: AcademyEvent) => !e.id?.startsWith('event-seed-'));
+      } else {
+        dbEvents = [];
+      }
 
-      console.log(`[Storage] Database loaded from disk: ${dbPlayers.length} players, ${dbAdmins.length} admins, ${dbNotifications.length} notifications, ${dbEvents.length} events.`);
+      console.log(`[Storage] Database loaded from disk: ${dbPlayers.length} live players, ${dbAdmins.length} admins, ${dbNotifications.length} notifications.`);
     } else {
-      dbPlayers = [...INITIAL_PLAYERS_SEED];
-      dbSubmissions = [...INITIAL_SUBMISSIONS_SEED];
-      dbAuditLogs = [...INITIAL_AUDIT_LOGS_SEED];
-      dbNotifications = [...INITIAL_NOTIFICATIONS_SEED];
-      dbEvents = [...INITIAL_EVENTS_SEED];
+      dbPlayers = [];
+      dbSubmissions = [];
+      dbAuditLogs = [];
+      dbNotifications = [];
+      dbEvents = [];
       saveDatabase();
-      console.log(`[Storage] Database initialized with seed data and saved to ${DB_FILE}`);
+      console.log(`[Storage] Clean empty database created and saved to ${DB_FILE}`);
     }
   } catch (err) {
     console.error('[Storage] Error loading database from disk:', err);
-    dbPlayers = [...INITIAL_PLAYERS_SEED];
-    dbSubmissions = [...INITIAL_SUBMISSIONS_SEED];
-    dbAuditLogs = [...INITIAL_AUDIT_LOGS_SEED];
-    dbNotifications = [...INITIAL_NOTIFICATIONS_SEED];
-    dbEvents = [...INITIAL_EVENTS_SEED];
+    dbPlayers = [];
+    dbSubmissions = [];
+    dbAuditLogs = [];
+    dbNotifications = [];
+    dbEvents = [];
     saveDatabase();
   }
 }
@@ -630,6 +327,10 @@ async function startServer() {
     if (Array.isArray(clientPlayers)) {
       clientPlayers.forEach((cp: Player) => {
         if (!cp || !cp.xnId) return;
+        // Ignore any lingering demo seeds
+        if (cp.id?.startsWith('p-seed-') || ['XN-001', 'XN-002', 'XN-003', 'XN-004', 'XN-005', 'XN-006'].includes(cp.xnId)) {
+          return;
+        }
         const existsIndex = dbPlayers.findIndex(
           p => p.xnId.toLowerCase() === cp.xnId.toLowerCase() || (cp.username && p.username.toLowerCase() === cp.username.toLowerCase())
         );
@@ -643,6 +344,9 @@ async function startServer() {
     if (Array.isArray(clientSubs)) {
       clientSubs.forEach((cs: Submission) => {
         if (!cs || !cs.id) return;
+        if (cs.id.startsWith('sub-9021') || cs.id.startsWith('sub-8842') || cs.id.startsWith('sub-7612')) {
+          return;
+        }
         const exists = dbSubmissions.some(s => s.id === cs.id);
         if (!exists) {
           dbSubmissions.push(cs);
@@ -663,6 +367,28 @@ async function startServer() {
       notifications: dbNotifications,
       events: dbEvents.filter(e => e.isActive !== false),
       serverTimestamp: new Date().toISOString()
+    });
+  });
+
+  // Emergency / Administrative Data Purge
+  app.post('/api/admin/clear-all-data', (req: Request, res: Response) => {
+    const { preserveAdmins = true } = req.body || {};
+    dbPlayers = [];
+    dbSubmissions = [];
+    dbAuditLogs = [];
+    dbNotifications = [];
+    dbEvents = [];
+    if (!preserveAdmins) {
+      dbAdmins = [];
+      dbAdminRequests = [];
+    }
+    saveDatabase();
+    console.log('[Storage] Database purged. All players, submissions, logs, and events wiped.');
+    res.json({
+      success: true,
+      message: 'All application data has been successfully cleared.',
+      totalPlayers: 0,
+      totalSubmissions: 0
     });
   });
 

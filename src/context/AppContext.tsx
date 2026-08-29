@@ -185,26 +185,66 @@ const STORAGE_KEY_ADMIN = 'xn_academy_is_admin_v1';
 const STORAGE_KEY_ADMIN_REQUESTS = 'xn_academy_admin_requests_v1';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const isDemoSeedPlayer = (p: Player) => {
+    if (!p) return true;
+    return p.id?.startsWith('p-seed-') || ['XN-001', 'XN-002', 'XN-003', 'XN-004', 'XN-005', 'XN-006'].includes(p.xnId) || ['vanguard_prime', 'cypher_99', 'apex_nova', 'ghost_pulse', 'aegis_core', 'strike_echo'].includes(p.username);
+  };
+
   const [players, setPlayers] = useState<Player[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_PLAYERS);
-    return saved ? JSON.parse(saved) : INITIAL_PLAYERS;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(p => !isDemoSeedPlayer(p));
+        }
+      } catch {
+        return [];
+      }
+    }
+    return [];
   });
 
   const [submissions, setSubmissions] = useState<Submission[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_SUBS);
-    return saved ? JSON.parse(saved) : INITIAL_SUBMISSIONS;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((s: Submission) => !s.id?.startsWith('sub-9021') && !s.id?.startsWith('sub-8842') && !s.id?.startsWith('sub-7612'));
+        }
+      } catch {
+        return [];
+      }
+    }
+    return [];
   });
 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_LOGS);
-    return saved ? JSON.parse(saved) : INITIAL_AUDIT_LOGS;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((l: AuditLog) => !l.id?.startsWith('log-seed-'));
+        }
+      } catch {
+        return [];
+      }
+    }
+    return [];
   });
 
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_USER);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (isDemoSeedPlayer(parsed)) {
+          localStorage.removeItem(STORAGE_KEY_USER);
+          return null;
+        }
+        return parsed;
       } catch {
         return null;
       }
@@ -412,8 +452,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             
             if (localSavedPlayersRaw || localSavedSubsRaw) {
               try {
-                const localPlayers: Player[] = localSavedPlayersRaw ? JSON.parse(localSavedPlayersRaw) : [];
-                const localSubs: Submission[] = localSavedSubsRaw ? JSON.parse(localSavedSubsRaw) : [];
+                const rawPlayers: Player[] = localSavedPlayersRaw ? JSON.parse(localSavedPlayersRaw) : [];
+                const rawSubs: Submission[] = localSavedSubsRaw ? JSON.parse(localSavedSubsRaw) : [];
+                
+                const localPlayers = rawPlayers.filter(p => !isDemoSeedPlayer(p));
+                const localSubs = rawSubs.filter(s => !s.id?.startsWith('sub-9021') && !s.id?.startsWith('sub-8842') && !s.id?.startsWith('sub-7612'));
                 
                 const hasNewPlayers = localPlayers.some(lp => lp.xnId && !state.players.some(sp => sp.xnId.toLowerCase() === lp.xnId.toLowerCase()));
                 const hasNewSubs = localSubs.some(ls => ls.id && !state.submissions.some(ss => ss.id === ls.id));
