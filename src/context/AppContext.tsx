@@ -152,6 +152,7 @@ interface AppContextType {
   rejectAdminRequest: (requestId: string) => Promise<void>;
   refreshAdminData: () => Promise<void>;
   refreshPlayers: () => Promise<void>;
+  refreshAllData: () => Promise<void>;
 
   // Head of Command & Admin Powers
   resetAllRanks: (reason?: string) => Promise<void>;
@@ -343,7 +344,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         api.getAdminStatus(),
         api.getAdminRequests()
       ]);
-      setAdminStatus(status);
+      if (status) setAdminStatus(status);
       if (requests && requests.length >= 0) {
         setAdminRequests(requests);
       }
@@ -352,52 +353,153 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Initial Fetch & Sync from Backend APIs
+  // Full Database State Synchronization (across PC and Mobile)
+  const refreshAllData = async () => {
+    try {
+      const state = await api.getFullState();
+      if (state) {
+        if (Array.isArray(state.players)) {
+          setPlayers(state.players);
+          // Keep current player profile synchronized with server authoritative state
+          setCurrentPlayer(prev => {
+            if (!prev) return null;
+            const updated = state.players.find(
+              p => p.xnId.toLowerCase() === prev.xnId.toLowerCase() || (p.username && prev.username && p.username.toLowerCase() === prev.username.toLowerCase())
+            );
+            return updated || prev;
+          });
+        }
+        if (Array.isArray(state.submissions)) {
+          setSubmissions(state.submissions);
+        }
+        if (Array.isArray(state.auditLogs)) {
+          setAuditLogs(state.auditLogs);
+        }
+        if (state.adminStatus) {
+          setAdminStatus(state.adminStatus);
+        }
+        if (Array.isArray(state.adminRequests)) {
+          setAdminRequests(state.adminRequests);
+        }
+        if (Array.isArray(state.notifications)) {
+          setNotifications(state.notifications);
+        }
+        if (Array.isArray(state.events)) {
+          setEvents(state.events);
+        }
+      }
+    } catch (err) {
+      console.warn('[XN Sync] Real-time sync error:', err);
+    }
+  };
+
+  // Continuous Real-Time Cross-Device Synchronization Engine
   useEffect(() => {
     let isMounted = true;
-    const fetchBackendData = async () => {
-      try {
-        const [serverPlayers, serverSubs, serverLogs, status, requests, serverNotifs, serverEvents] = await Promise.all([
-          api.getPlayers(),
-          api.getSubmissions(),
-          api.getAuditLogs(),
-          api.getAdminStatus(),
-          api.getAdminRequests(),
-          api.getNotifications(),
-          api.getEvents()
-        ]);
+    let initialBootstrapDone = false;
 
-        if (isMounted) {
-          if (serverPlayers && serverPlayers.length > 0) {
-            setPlayers(serverPlayers);
+    const performSync = async () => {
+      try {
+        const state = await api.getFullState();
+        if (!isMounted) return;
+
+        if (state) {
+          // If this is the initial run, check if local storage had custom players not yet on server
+          if (!initialBootstrapDone) {
+            initialBootstrapDone = true;
+            const localSavedPlayersRaw = localStorage.getItem(STORAGE_KEY_PLAYERS);
+            const localSavedSubsRaw = localStorage.getItem(STORAGE_KEY_SUBS);
+            
+            if (localSavedPlayersRaw || localSavedSubsRaw) {
+              try {
+                const localPlayers: Player[] = localSavedPlayersRaw ? JSON.parse(localSavedPlayersRaw) : [];
+                const localSubs: Submission[] = localSavedSubsRaw ? JSON.parse(localSavedSubsRaw) : [];
+                
+                const hasNewPlayers = localPlayers.some(lp => lp.xnId && !state.players.some(sp => sp.xnId.toLowerCase() === lp.xnId.toLowerCase()));
+                const hasNewSubs = localSubs.some(ls => ls.id && !state.submissions.some(ss => ss.id === ls.id));
+                
+                if (hasNewPlayers || hasNewSubs) {
+                  const mergeResult = await api.clientMergeSync({
+                    players: localPlayers,
+                    submissions: localSubs
+                  });
+                  if (mergeResult && isMounted) {
+                    setPlayers(mergeResult.players);
+                    setSubmissions(mergeResult.submissions);
+                    setAuditLogs(mergeResult.auditLogs);
+                    setNotifications(mergeResult.notifications);
+                    setEvents(mergeResult.events);
+                    return;
+                  }
+                }
+              } catch (e) {
+                console.warn('[Storage Reconciliation]', e);
+              }
+            }
           }
-          if (serverSubs && serverSubs.length > 0) {
-            setSubmissions(serverSubs);
+
+          // Authoritative Server State Sync
+          if (Array.isArray(state.players)) {
+            setPlayers(state.players);
+            setCurrentPlayer(prev => {
+              if (!prev) return null;
+              const updated = state.players.find(
+                p => p.xnId.toLowerCase() === prev.xnId.toLowerCase() || (p.username && prev.username && p.username.toLowerCase() === prev.username.toLowerCase())
+              );
+              return updated || prev;
+            });
           }
-          if (serverLogs && serverLogs.length > 0) {
-            setAuditLogs(serverLogs);
+          if (Array.isArray(state.submissions)) {
+            setSubmissions(state.submissions);
           }
-          if (status) {
-            setAdminStatus(status);
+          if (Array.isArray(state.auditLogs)) {
+            setAuditLogs(state.auditLogs);
           }
-          if (requests) {
-            setAdminRequests(requests);
+          if (state.adminStatus) {
+            setAdminStatus(state.adminStatus);
           }
-          if (serverNotifs) {
-            setNotifications(serverNotifs);
+          if (Array.isArray(state.adminRequests)) {
+            setAdminRequests(state.adminRequests);
           }
-          if (serverEvents) {
-            setEvents(serverEvents);
+          if (Array.isArray(state.notifications)) {
+            setNotifications(state.notifications);
+          }
+          if (Array.isArray(state.events)) {
+            setEvents(state.events);
           }
         }
       } catch (err) {
-        console.warn('[XN Protocol] Backend API sync note:', err);
+        console.warn('[XN Protocol] Backend sync note:', err);
       }
     };
 
-    fetchBackendData();
+    // Immediate initial fetch
+    performSync();
+
+    // Periodic fast background synchronization (every 3.5 seconds)
+    const intervalId = setInterval(performSync, 3500);
+
+    // Synchronize immediately when window or tab gains focus or becomes visible
+    const handleFocus = () => {
+      performSync();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        performSync();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('online', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       isMounted = false;
+      clearInterval(intervalId);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('online', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -1289,6 +1391,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rejectAdminRequest,
         refreshAdminData,
         refreshPlayers,
+        refreshAllData,
         resetAllRanks,
         resetPlayerRank,
         deductXp,

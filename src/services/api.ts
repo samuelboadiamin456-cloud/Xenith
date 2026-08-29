@@ -27,6 +27,49 @@ export const api = {
     }
   },
 
+  // Database Full State Synchronization
+  async getFullState(): Promise<{
+    players: Player[];
+    submissions: Submission[];
+    auditLogs: AuditLog[];
+    adminStatus: { hasInitialAdmin: boolean; totalAdmins: number; pendingRequestsCount: number };
+    admins: AdminUser[];
+    adminRequests: AdminRequest[];
+    notifications: AppNotification[];
+    events: AcademyEvent[];
+    serverTimestamp: string;
+  } | null> {
+    try {
+      const res = await fetch('/api/sync/full-state');
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (err) {
+      console.warn('[API] getFullState error', err);
+      return null;
+    }
+  },
+
+  async clientMergeSync(payload: { players?: Player[]; submissions?: Submission[] }): Promise<{
+    players: Player[];
+    submissions: Submission[];
+    auditLogs: AuditLog[];
+    notifications: AppNotification[];
+    events: AcademyEvent[];
+  } | null> {
+    try {
+      const res = await fetch('/api/sync/client-merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (err) {
+      console.warn('[API] clientMergeSync error', err);
+      return null;
+    }
+  },
+
   // Players API
   async getPlayers(params?: { role?: string; rank?: string; sort?: string }): Promise<Player[]> {
     try {
