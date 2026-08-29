@@ -13,7 +13,7 @@ import {
 } from '../types';
 import { INITIAL_PLAYERS, INITIAL_SUBMISSIONS, INITIAL_AUDIT_LOGS } from '../data/initialData';
 import { calculateRank, calculateSubmissionScore, RANK_CONFIGS } from '../data/rankConfigs';
-import { api } from '../services/api';
+import { api, clearAdminToken } from '../services/api';
 
 interface AppContextType {
   players: Player[];
@@ -505,6 +505,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentPlayer(null);
     setCurrentAdmin(null);
     setIsAdmin(false);
+    clearAdminToken();
     showToast('Logged out of session', 'info');
     setActiveView('home');
   };

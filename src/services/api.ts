@@ -1,5 +1,21 @@
 import { Player, Submission, AuditLog, AdminStats, SubmissionStats, AdminUser, AdminRequest } from '../types';
 
+const ADMIN_TOKEN_KEY = 'xn_academy_admin_token_v1';
+
+function getAdminToken(): string | null {
+  return localStorage.getItem(ADMIN_TOKEN_KEY);
+}
+function setAdminToken(token: string) {
+  localStorage.setItem(ADMIN_TOKEN_KEY, token);
+}
+export function clearAdminToken() {
+  localStorage.removeItem(ADMIN_TOKEN_KEY);
+}
+function authHeaders(): Record<string, string> {
+  const token = getAdminToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export const api = {
   // Check backend health
   async checkHealth(): Promise<boolean> {
@@ -136,11 +152,12 @@ export const api = {
   async approveSubmission(id: string): Promise<{ submission: Submission; player?: Player; auditLog?: AuditLog }> {
     const res = await fetch(`/api/submissions/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json', ...authHeaders() }
     });
 
     if (!res.ok) {
-      throw new Error('Failed to approve submission');
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to approve submission');
     }
 
     return await res.json();
@@ -149,11 +166,12 @@ export const api = {
   async flagSubmission(id: string): Promise<{ submission: Submission; auditLog?: AuditLog }> {
     const res = await fetch(`/api/submissions/${encodeURIComponent(id)}/flag`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json', ...authHeaders() }
     });
 
     if (!res.ok) {
-      throw new Error('Failed to flag submission');
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to flag submission');
     }
 
     return await res.json();
@@ -162,12 +180,13 @@ export const api = {
   async rejectSubmission(id: string, reason: string): Promise<{ submission: Submission; auditLog?: AuditLog }> {
     const res = await fetch(`/api/submissions/${encodeURIComponent(id)}/reject`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ reason })
     });
 
     if (!res.ok) {
-      throw new Error('Failed to reject submission');
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to reject submission');
     }
 
     return await res.json();
@@ -224,7 +243,9 @@ export const api = {
       throw new Error(errData.error || 'Failed to initialize Head of Command');
     }
 
-    return await res.json();
+    const result = await res.json();
+    if (result.token) setAdminToken(result.token);
+    return result;
   },
 
   async requestAdminAccess(data: {
@@ -260,12 +281,14 @@ export const api = {
       throw new Error(errData.error || 'Admin authentication failed');
     }
 
-    return await res.json();
+    const result = await res.json();
+    if (result.token) setAdminToken(result.token);
+    return result;
   },
 
   async getAdminRequests(): Promise<AdminRequest[]> {
     try {
-      const res = await fetch('/api/admin/requests');
+      const res = await fetch('/api/admin/requests', { headers: authHeaders() });
       if (!res.ok) return [];
       const data = await res.json();
       return data.requests || [];
@@ -277,7 +300,7 @@ export const api = {
   async approveAdminRequest(id: string): Promise<{ message: string; request: AdminRequest; newAdmin: AdminUser }> {
     const res = await fetch(`/api/admin/requests/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json', ...authHeaders() }
     });
 
     if (!res.ok) {
@@ -291,7 +314,7 @@ export const api = {
   async rejectAdminRequest(id: string): Promise<{ message: string; request: AdminRequest }> {
     const res = await fetch(`/api/admin/requests/${encodeURIComponent(id)}/reject`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json', ...authHeaders() }
     });
 
     if (!res.ok) {
@@ -304,7 +327,7 @@ export const api = {
 
   async getAdmins(): Promise<AdminUser[]> {
     try {
-      const res = await fetch('/api/admin/list');
+      const res = await fetch('/api/admin/list', { headers: authHeaders() });
       if (!res.ok) return [];
       const data = await res.json();
       return data.admins || [];
