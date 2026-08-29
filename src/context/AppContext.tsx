@@ -9,11 +9,14 @@ import {
   SubmissionStats, 
   AdminStats,
   AdminUser,
-  AdminRequest
+  AdminRequest,
+  AppNotification,
+  AcademyEvent
 } from '../types';
 import { INITIAL_PLAYERS, INITIAL_SUBMISSIONS, INITIAL_AUDIT_LOGS } from '../data/initialData';
 import { calculateRank, calculateSubmissionScore, RANK_CONFIGS } from '../data/rankConfigs';
 import { api, clearAdminToken } from '../services/api';
+import { notificationService } from '../services/notificationService';
 
 interface AppContextType {
   players: Player[];
@@ -35,6 +38,71 @@ interface AppContextType {
   openAuthModal: (mode?: 'login' | 'register' | 'admin-login' | 'admin-register') => void;
   closeAuthModal: () => void;
   
+  // Notifications & Device Alerts
+  notifications: AppNotification[];
+  unreadNotificationsCount: number;
+  notificationModalOpen: boolean;
+  openNotificationModal: () => void;
+  closeNotificationModal: () => void;
+  requestDeviceNotificationPermission: () => Promise<boolean>;
+  deviceNotificationPermission: NotificationPermission | 'unsupported';
+  sendNotification: (payload: {
+    recipientXnId?: string;
+    title: string;
+    message: string;
+    type?: AppNotification['type'];
+    priority?: AppNotification['priority'];
+    linkView?: string;
+  }) => Promise<AppNotification>;
+  markNotificationAsRead: (id: string) => Promise<void>;
+  markAllNotificationsAsRead: () => Promise<void>;
+  deleteNotification: (id: string) => Promise<void>;
+  refreshNotifications: () => Promise<void>;
+
+  // Academy Events
+  events: AcademyEvent[];
+  createEvent: (eventData: {
+    title: string;
+    eventType: AcademyEvent['eventType'];
+    description: string;
+    rewardXp: number;
+    scheduledDate: string;
+    targetRank?: string;
+    targetRole?: string;
+    broadcastPush?: boolean;
+  }) => Promise<AcademyEvent>;
+  deleteEvent: (id: string) => Promise<void>;
+  refreshEvents: () => Promise<void>;
+
+  // Academy Operations: Player Enrollment & Removal
+  addPlayerToAcademy: (playerData: {
+    displayName: string;
+    ign: string;
+    role: Player['role'];
+    email?: string;
+    username?: string;
+    country?: string;
+    bio?: string;
+    avatarUrl?: string;
+    initialXp?: number;
+    academyStatus?: Player['academyStatus'];
+    verificationStatus?: Player['verificationStatus'];
+    lifetimeStats?: Partial<Player['lifetimeStats']>;
+  }) => Promise<Player>;
+  removePlayerFromAcademy: (xnId: string, reason: string) => Promise<void>;
+
+  // Locked Telemetry Calibration
+  calibratePlayerTelemetry: (xnId: string, data: {
+    kills?: number;
+    wins?: number;
+    matches?: number;
+    kd?: number;
+    winRate?: number;
+    reportTicket?: string;
+    reason?: string;
+    recalculateXp?: boolean;
+  }) => Promise<Player>;
+
   // PWA Homescreen Installation
   installModalOpen: boolean;
   isInstallable: boolean;
@@ -182,6 +250,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'admin-login' | 'admin-register'>('register');
 
+  // Notifications and Events State
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [events, setEvents] = useState<AcademyEvent[]>([]);
+  const [notificationModalOpen, setNotificationModalOpen] = useState<boolean>(false);
+  const [deviceNotificationPermission, setDeviceNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() => {
+    return notificationService.getPermission();
+  });
+
+  const unreadNotificationsCount = notifications.filter(n => {
+    if (n.read) return false;
+    if (!n.recipientXnId) return true; // Global broadcast
+    return currentPlayer?.xnId === n.recipientXnId;
+  }).length;
+
   // PWA State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstallable, setIsInstallable] = useState<boolean>(false);
@@ -275,12 +357,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let isMounted = true;
     const fetchBackendData = async () => {
       try {
-        const [serverPlayers, serverSubs, serverLogs, status, requests] = await Promise.all([
+        const [serverPlayers, serverSubs, serverLogs, status, requests, serverNotifs, serverEvents] = await Promise.all([
           api.getPlayers(),
           api.getSubmissions(),
           api.getAuditLogs(),
           api.getAdminStatus(),
-          api.getAdminRequests()
+          api.getAdminRequests(),
+          api.getNotifications(),
+          api.getEvents()
         ]);
 
         if (isMounted) {
@@ -298,6 +382,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           if (requests) {
             setAdminRequests(requests);
+          }
+          if (serverNotifs) {
+            setNotifications(serverNotifs);
+          }
+          if (serverEvents) {
+            setEvents(serverEvents);
           }
         }
       } catch (err) {
@@ -908,6 +998,221 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast(`Submission ${submissionId} Rejected`, 'error');
   };
 
+  // --- ACADEMY OPERATIONS: ADD & REMOVE OPERATIVES ---
+  const addPlayerToAcademy = async (playerData: {
+    displayName: string;
+    ign: string;
+    role: Player['role'];
+    email?: string;
+    username?: string;
+    country?: string;
+    bio?: string;
+    avatarUrl?: string;
+    initialXp?: number;
+    academyStatus?: Player['academyStatus'];
+    verificationStatus?: Player['verificationStatus'];
+    lifetimeStats?: Partial<Player['lifetimeStats']>;
+  }): Promise<Player> => {
+    try {
+      const res = await api.addPlayerToAcademy({
+        ...playerData,
+        adminUsername: currentAdmin?.displayName || currentAdmin?.username || 'Command'
+      });
+      setPlayers(prev => [res.player, ...prev]);
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      showToast(`Operative ${res.player.displayName} (${res.player.xnId}) enrolled`, 'success');
+      refreshNotifications();
+      return res.player;
+    } catch (err: any) {
+      showToast(err.message || 'Failed to add operative', 'error');
+      throw err;
+    }
+  };
+
+  const removePlayerFromAcademy = async (xnId: string, reason: string) => {
+    try {
+      const res = await api.removePlayerFromAcademy(
+        xnId,
+        reason,
+        currentAdmin?.displayName || currentAdmin?.username || 'Command'
+      );
+      setPlayers(prev => prev.filter(p => p.xnId !== xnId));
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      if (currentPlayer?.xnId === xnId) {
+        logout();
+      }
+      showToast(`Operative ${xnId} removed from Academy roster`, 'info');
+      refreshNotifications();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to remove operative', 'error');
+      throw err;
+    }
+  };
+
+  // --- LOCKED TELEMETRY CALIBRATION ---
+  const calibratePlayerTelemetry = async (xnId: string, data: {
+    kills?: number;
+    wins?: number;
+    matches?: number;
+    kd?: number;
+    winRate?: number;
+    reportTicket?: string;
+    reason?: string;
+    recalculateXp?: boolean;
+  }): Promise<Player> => {
+    try {
+      const res = await api.calibratePlayerTelemetry(xnId, {
+        ...data,
+        adminUsername: currentAdmin?.displayName || currentAdmin?.username || 'Academy_Staff'
+      });
+      setPlayers(prev => prev.map(p => p.xnId === xnId ? res.player : p));
+      if (currentPlayer?.xnId === xnId) {
+        setCurrentPlayer(res.player);
+      }
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      if (res.notification) {
+        setNotifications(prev => [res.notification!, ...prev]);
+        notificationService.sendDeviceNotification(res.notification.title, {
+          body: res.notification.message
+        });
+      }
+      showToast(`Telemetry calibrated for ${res.player.displayName} (${xnId})`, 'success');
+      return res.player;
+    } catch (err: any) {
+      showToast(err.message || 'Telemetry calibration failed', 'error');
+      throw err;
+    }
+  };
+
+  // --- NOTIFICATION MANAGEMENT & DEVICE PUSH ---
+  const refreshNotifications = async () => {
+    try {
+      const notifs = await api.getNotifications(currentPlayer?.xnId);
+      setNotifications(notifs);
+    } catch (err) {
+      console.warn('Failed to refresh notifications:', err);
+    }
+  };
+
+  const openNotificationModal = () => setNotificationModalOpen(true);
+  const closeNotificationModal = () => setNotificationModalOpen(false);
+
+  const requestDeviceNotificationPermission = async (): Promise<boolean> => {
+    const perm = await notificationService.requestPermission();
+    setDeviceNotificationPermission(perm);
+    if (perm === 'granted') {
+      showToast('Device push notifications enabled', 'success');
+      return true;
+    } else {
+      showToast('Notification permission declined', 'info');
+      return false;
+    }
+  };
+
+  const sendNotification = async (payload: {
+    recipientXnId?: string;
+    title: string;
+    message: string;
+    type?: AppNotification['type'];
+    priority?: AppNotification['priority'];
+    linkView?: string;
+  }): Promise<AppNotification> => {
+    try {
+      const res = await api.sendNotification({
+        ...payload,
+        sender: currentAdmin?.displayName || 'Academy Command'
+      });
+      setNotifications(prev => [res.notification, ...prev]);
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      // Trigger instant browser device alert
+      notificationService.sendDeviceNotification(res.notification.title, {
+        body: res.notification.message
+      });
+      showToast('Notification broadcasted to player devices', 'success');
+      return res.notification;
+    } catch (err: any) {
+      showToast(err.message || 'Failed to dispatch notification', 'error');
+      throw err;
+    }
+  };
+
+  const markNotificationAsRead = async (id: string) => {
+    await api.markNotificationAsRead(id);
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  };
+
+  const markAllNotificationsAsRead = async () => {
+    await api.markAllNotificationsAsRead(currentPlayer?.xnId);
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    showToast('All notifications marked as read', 'info');
+  };
+
+  const deleteNotification = async (id: string) => {
+    await api.deleteNotification(id);
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
+  // --- ACADEMY EVENTS ---
+  const refreshEvents = async () => {
+    try {
+      const evs = await api.getEvents();
+      setEvents(evs);
+    } catch (err) {
+      console.warn('Failed to refresh events:', err);
+    }
+  };
+
+  const createEvent = async (eventData: {
+    title: string;
+    eventType: AcademyEvent['eventType'];
+    description: string;
+    rewardXp: number;
+    scheduledDate: string;
+    targetRank?: string;
+    targetRole?: string;
+    broadcastPush?: boolean;
+  }): Promise<AcademyEvent> => {
+    try {
+      const res = await api.createEvent({
+        ...eventData,
+        createdBy: currentAdmin?.displayName || 'Academy Command'
+      });
+      setEvents(prev => [res.event, ...prev]);
+      if (res.auditLog) {
+        setAuditLogs(prev => [res.auditLog!, ...prev]);
+      }
+      if (eventData.broadcastPush) {
+        notificationService.sendDeviceNotification(`NEW EVENT: ${res.event.title}`, {
+          body: `${res.event.description} (+${res.event.rewardXp} XP Reward)`
+        });
+      }
+      showToast(`Academy event "${res.event.title}" published!`, 'success');
+      refreshNotifications();
+      return res.event;
+    } catch (err: any) {
+      showToast(err.message || 'Failed to create event', 'error');
+      throw err;
+    }
+  };
+
+  const deleteEvent = async (id: string) => {
+    try {
+      await api.deleteEvent(id, currentAdmin?.displayName);
+      setEvents(prev => prev.filter(e => e.id !== id));
+      showToast('Event removed from Academy schedule', 'info');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to delete event', 'error');
+    }
+  };
+
   // Compute admin stats
   const adminStats: AdminStats = {
     totalPlayers: players.length,
@@ -940,6 +1245,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         authModalMode,
         openAuthModal,
         closeAuthModal,
+
+        // Notifications
+        notifications,
+        unreadNotificationsCount,
+        notificationModalOpen,
+        openNotificationModal,
+        closeNotificationModal,
+        requestDeviceNotificationPermission,
+        deviceNotificationPermission,
+        sendNotification,
+        markNotificationAsRead,
+        markAllNotificationsAsRead,
+        deleteNotification,
+        refreshNotifications,
+
+        // Events
+        events,
+        createEvent,
+        deleteEvent,
+        refreshEvents,
+
+        // Academy Operations
+        addPlayerToAcademy,
+        removePlayerFromAcademy,
+        calibratePlayerTelemetry,
+
+        // PWA
         installModalOpen,
         isInstallable,
         isAppInstalled,

@@ -1,4 +1,4 @@
-import { Player, Submission, AuditLog, AdminStats, SubmissionStats, AdminUser, AdminRequest } from '../types';
+import { Player, Submission, AuditLog, AdminStats, SubmissionStats, AdminUser, AdminRequest, AppNotification, AcademyEvent } from '../types';
 
 const ADMIN_TOKEN_KEY = 'xn_academy_admin_token_v1';
 
@@ -396,5 +396,197 @@ export const api = {
     }
 
     return await res.json();
+  },
+
+  // --- ACADEMY OPERATIONS: ADD & REMOVE PLAYERS ---
+  async addPlayerToAcademy(playerData: {
+    displayName: string;
+    ign: string;
+    role: Player['role'];
+    email?: string;
+    username?: string;
+    country?: string;
+    bio?: string;
+    avatarUrl?: string;
+    initialXp?: number;
+    academyStatus?: Player['academyStatus'];
+    verificationStatus?: Player['verificationStatus'];
+    lifetimeStats?: Partial<Player['lifetimeStats']>;
+    adminUsername?: string;
+  }): Promise<{ message: string; player: Player; auditLog?: AuditLog }> {
+    const res = await fetch('/api/admin/players/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(playerData)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to add operative to academy');
+    }
+
+    return await res.json();
+  },
+
+  async removePlayerFromAcademy(xnId: string, reason: string, adminUsername?: string): Promise<{ message: string; removedXnId: string; auditLog?: AuditLog }> {
+    const res = await fetch(`/api/admin/players/${encodeURIComponent(xnId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ reason, adminUsername })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to remove operative from academy');
+    }
+
+    return await res.json();
+  },
+
+  // --- LOCK & CALIBRATE TELEMETRY METRIC (BASED ON PLAYER REPORT) ---
+  async calibratePlayerTelemetry(xnId: string, data: {
+    kills?: number;
+    wins?: number;
+    matches?: number;
+    kd?: number;
+    winRate?: number;
+    reportTicket?: string;
+    reason?: string;
+    adminUsername?: string;
+    recalculateXp?: boolean;
+  }): Promise<{ message: string; player: Player; notification?: AppNotification; auditLog?: AuditLog }> {
+    const res = await fetch(`/api/admin/players/${encodeURIComponent(xnId)}/calibrate-telemetry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(data)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to calibrate telemetry metrics');
+    }
+
+    return await res.json();
+  },
+
+  // --- NOTIFICATIONS API ---
+  async getNotifications(recipientXnId?: string): Promise<AppNotification[]> {
+    try {
+      const query = recipientXnId ? `?recipientXnId=${encodeURIComponent(recipientXnId)}` : '';
+      const res = await fetch(`/api/notifications${query}`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.notifications || [];
+    } catch {
+      return [];
+    }
+  },
+
+  async sendNotification(payload: {
+    recipientXnId?: string;
+    title: string;
+    message: string;
+    type?: AppNotification['type'];
+    priority?: AppNotification['priority'];
+    linkView?: string;
+    sender?: string;
+  }): Promise<{ message: string; notification: AppNotification; auditLog?: AuditLog }> {
+    const res = await fetch('/api/notifications/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to dispatch notification');
+    }
+
+    return await res.json();
+  },
+
+  async markNotificationAsRead(id: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
+        method: 'POST'
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  async markAllNotificationsAsRead(recipientXnId?: string): Promise<boolean> {
+    try {
+      const res = await fetch('/api/notifications/read-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipientXnId })
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  async deleteNotification(id: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/notifications/${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  // --- ACADEMY EVENTS API ---
+  async getEvents(): Promise<AcademyEvent[]> {
+    try {
+      const res = await fetch('/api/events');
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.events || [];
+    } catch {
+      return [];
+    }
+  },
+
+  async createEvent(eventData: {
+    title: string;
+    eventType: AcademyEvent['eventType'];
+    description: string;
+    rewardXp: number;
+    scheduledDate: string;
+    targetRank?: string;
+    targetRole?: string;
+    createdBy?: string;
+    broadcastPush?: boolean;
+  }): Promise<{ message: string; event: AcademyEvent; auditLog?: AuditLog }> {
+    const res = await fetch('/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify(eventData)
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to publish academy event');
+    }
+
+    return await res.json();
+  },
+
+  async deleteEvent(id: string, adminUsername?: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/events/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ adminUsername })
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 };

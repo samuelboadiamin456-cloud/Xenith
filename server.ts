@@ -12,7 +12,7 @@ export interface LifetimeStats {
   matches: number;
   kd: number;
   winRate: number; // Cumulative win rate %
-  hs: number;
+  hs?: number;
 }
 
 export interface Player {
@@ -67,14 +67,14 @@ export interface SubmissionStats {
   matches: number;
   kd: number;
   winRate: number;
-  hs: number;
+  hs?: number;
 }
 
 export interface ScoreBreakdown {
   killsXp: number;
   winBonus: number;
   kdBonus: number;
-  hsBonus: number;
+  hsBonus?: number;
   total: number;
 }
 
@@ -102,6 +102,33 @@ export interface AuditLog {
   details: string;
 }
 
+export interface AppNotification {
+  id: string;
+  recipientXnId: string; // 'ALL' or specific xnId
+  title: string;
+  message: string;
+  type: 'event' | 'sitrep' | 'reward' | 'announcement' | 'rank' | 'telemetry' | 'system';
+  priority: 'low' | 'normal' | 'urgent';
+  createdAt: string;
+  read: boolean;
+  linkView?: string;
+  sender: string;
+}
+
+export interface AcademyEvent {
+  id: string;
+  title: string;
+  eventType: 'TOURNAMENT' | 'SCRIMMAGE' | 'DOUBLE_XP' | 'WAR_ROOM' | 'DRILL' | 'TRIALS';
+  description: string;
+  rewardXp: number;
+  scheduledDate: string;
+  targetRank: string;
+  targetRole: string;
+  createdBy: string;
+  createdAt: string;
+  isActive: boolean;
+}
+
 // Data Directory and Persistent Storage File
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -121,6 +148,78 @@ let dbSubmissions: Submission[] = [];
 let dbAuditLogs: AuditLog[] = [];
 let dbAdmins: AdminUser[] = [];
 let dbAdminRequests: AdminRequest[] = [];
+let dbNotifications: AppNotification[] = [];
+let dbEvents: AcademyEvent[] = [];
+
+// Seed initial default events and notifications if storage is empty
+const INITIAL_NOTIFICATIONS_SEED: AppNotification[] = [
+  {
+    id: 'notif-seed-1',
+    recipientXnId: 'ALL',
+    title: 'ACADEMY COMMAND NETWORK ONLINE',
+    message: 'Welcome to the official XN Academy Network. Match SITREP submission and rank calibrations are live.',
+    type: 'system',
+    priority: 'normal',
+    createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+    read: false,
+    linkView: 'leaderboard',
+    sender: 'Head of Command'
+  },
+  {
+    id: 'notif-seed-2',
+    recipientXnId: 'ALL',
+    title: 'VANGUARD INVITATIONAL ANNOUNCED',
+    message: 'New season competitive championship bracket has been scheduled. Check Academy Operations for tournament rules.',
+    type: 'event',
+    priority: 'urgent',
+    createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
+    read: false,
+    linkView: 'operations',
+    sender: 'Head of Command'
+  }
+];
+
+const INITIAL_EVENTS_SEED: AcademyEvent[] = [
+  {
+    id: 'event-seed-1',
+    title: 'VANGUARD INVITATIONAL 2026',
+    eventType: 'TOURNAMENT',
+    description: 'Premier seasonal championship. Double elimination tactical bracket for all registered academy operatives.',
+    rewardXp: 500,
+    scheduledDate: '2026-09-12 18:00 UTC',
+    targetRank: 'ALL',
+    targetRole: 'ALL',
+    createdBy: 'Head of Command',
+    createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+    isActive: true
+  },
+  {
+    id: 'event-seed-2',
+    title: 'DOUBLE XP TELEMETRY DRILL',
+    eventType: 'DOUBLE_XP',
+    description: 'Special weekend operation: verified match SITREPs receive 2x XP multipliers across all verified queues.',
+    rewardXp: 300,
+    scheduledDate: '2026-09-05 14:00 UTC',
+    targetRank: 'ALL',
+    targetRole: 'ALL',
+    createdBy: 'Head of Command',
+    createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
+    isActive: true
+  },
+  {
+    id: 'event-seed-3',
+    title: 'SNIPER RECON & TARGETING TRIALS',
+    eventType: 'TRIALS',
+    description: 'Precision marksmanship and long-range engagement trials. Dedicated commendations awarded for high K/D performances.',
+    rewardXp: 250,
+    scheduledDate: '2026-09-02 20:00 UTC',
+    targetRank: 'ALL',
+    targetRole: 'Sniper',
+    createdBy: 'Head of Command',
+    createdAt: new Date(Date.now() - 3600000 * 6).toISOString(),
+    isActive: true
+  }
+];
 
 // Load Database from disk on startup
 function loadDatabase() {
@@ -133,10 +232,19 @@ function loadDatabase() {
       if (Array.isArray(data.auditLogs)) dbAuditLogs = data.auditLogs;
       if (Array.isArray(data.admins)) dbAdmins = data.admins;
       if (Array.isArray(data.adminRequests)) dbAdminRequests = data.adminRequests;
-      console.log(`[Storage] Database loaded from disk: ${dbPlayers.length} players, ${dbAdmins.length} admins.`);
+      if (Array.isArray(data.notifications)) dbNotifications = data.notifications;
+      else dbNotifications = [...INITIAL_NOTIFICATIONS_SEED];
+      if (Array.isArray(data.events)) dbEvents = data.events;
+      else dbEvents = [...INITIAL_EVENTS_SEED];
+      console.log(`[Storage] Database loaded from disk: ${dbPlayers.length} players, ${dbAdmins.length} admins, ${dbNotifications.length} notifications, ${dbEvents.length} events.`);
+    } else {
+      dbNotifications = [...INITIAL_NOTIFICATIONS_SEED];
+      dbEvents = [...INITIAL_EVENTS_SEED];
     }
   } catch (err) {
     console.error('[Storage] Error loading database from disk:', err);
+    dbNotifications = [...INITIAL_NOTIFICATIONS_SEED];
+    dbEvents = [...INITIAL_EVENTS_SEED];
   }
 }
 
@@ -149,6 +257,8 @@ function saveDatabase() {
       auditLogs: dbAuditLogs,
       admins: dbAdmins,
       adminRequests: dbAdminRequests,
+      notifications: dbNotifications,
+      events: dbEvents,
       lastSaved: new Date().toISOString()
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
@@ -182,14 +292,13 @@ function calculateSubmissionScore(stats: SubmissionStats): ScoreBreakdown {
   const killsXp = Math.max(0, Math.round(Number(stats.kills) || 0)) * 5;
   const winBonus = Math.max(0, Math.round(Number(stats.wins) || 0)) * 25;
   const kdBonus = Math.round((Number(stats.kd) || 0) * 15);
-  const hsBonus = Math.round((Number(stats.hs) || 0) * 0.5);
-  const total = killsXp + winBonus + kdBonus + hsBonus;
+  const total = killsXp + winBonus + kdBonus;
 
   return {
     killsXp,
     winBonus,
     kdBonus,
-    hsBonus,
+    hsBonus: 0,
     total
   };
 }
@@ -437,8 +546,7 @@ async function startServer() {
       wins: Math.max(0, Math.round(Number(stats?.wins) || 0)),
       matches: Math.max(1, Math.round(Number(stats?.matches) || 1)),
       kd: Number(stats?.kd) || 0,
-      winRate: Number(stats?.winRate) || 0,
-      hs: Number(stats?.hs) || 0
+      winRate: Number(stats?.winRate) || 0
     };
 
     const score = calculateSubmissionScore(safeStats);
@@ -446,7 +554,6 @@ async function startServer() {
     // Anti-cheat fraud heuristic checks
     const fraudFlags: string[] = [];
     if (safeStats.kd > 12.0) fraudFlags.push('Extreme K/D Anomaly (>12.0)');
-    if (safeStats.hs > 85.0) fraudFlags.push('Abnormal Headshot Ratio (>85%)');
     if (safeStats.winRate > 95 && safeStats.matches > 5) fraudFlags.push('Unusually High Win Rate (>95%)');
 
     const newSub: Submission = {
@@ -509,7 +616,7 @@ async function startServer() {
       const newTotalXp = (targetPlayer.totalXp ?? 0) + awardedXp;
       const newRank = calculateRank(newTotalXp);
 
-      const oldStats = targetPlayer.lifetimeStats || { kills: 0, wins: 0, matches: 0, kd: 0, winRate: 0, hs: 0 };
+      const oldStats = targetPlayer.lifetimeStats || { kills: 0, wins: 0, matches: 0, kd: 0, winRate: 0 };
       const totalMatches = (oldStats.matches || 0) + (sub.stats.matches || 1);
       const totalWins = (oldStats.wins || 0) + (sub.stats.wins || 0);
       const totalKills = (oldStats.kills || 0) + (sub.stats.kills || 0);
@@ -519,8 +626,6 @@ async function startServer() {
       const updatedWinRate = totalMatches > 0 
         ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) 
         : 0;
-      
-      const updatedHs = parseFloat((((oldStats.hs || 0) + (sub.stats.hs || 0)) / 2).toFixed(1));
 
       updatedPlayer = {
         ...targetPlayer,
@@ -532,8 +637,7 @@ async function startServer() {
           wins: totalWins,
           matches: totalMatches,
           kd: updatedKd,
-          winRate: updatedWinRate,
-          hs: updatedHs
+          winRate: updatedWinRate
         }
       };
 
@@ -1081,6 +1185,445 @@ async function startServer() {
     res.json({
       message: `Successfully granted +${rewardAmount} XP reward to ${player.displayName}.`,
       player: safePlayer,
+      auditLog: log
+    });
+  });
+
+  // --- ACADEMY OPERATIONS: ADD PLAYER TO SYSTEM ---
+  app.post('/api/admin/players/add', (req: Request, res: Response) => {
+    const {
+      displayName,
+      ign,
+      role,
+      email,
+      username,
+      country,
+      bio,
+      avatarUrl,
+      initialXp = 0,
+      academyStatus = 'CADET',
+      verificationStatus = 'VERIFIED',
+      lifetimeStats,
+      adminUsername
+    } = req.body;
+
+    if (!displayName || !ign || !role) {
+      return res.status(400).json({ error: 'Display Name, In-Game Name (IGN), and Combat Role are required.' });
+    }
+
+    // Auto-generate unique sequential XN-ID (e.g. XN-014)
+    let nextNum = dbPlayers.length + 1;
+    let newXnId = `XN-${String(nextNum).padStart(3, '0')}`;
+    while (dbPlayers.some(p => p.xnId.toUpperCase() === newXnId.toUpperCase())) {
+      nextNum++;
+      newXnId = `XN-${String(nextNum).padStart(3, '0')}`;
+    }
+
+    const cleanUsername = username 
+      ? username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '')
+      : `${ign.trim().toLowerCase().replace(/[^a-z0-9]/g, '')}_${Math.floor(100 + Math.random() * 900)}`;
+
+    const cleanEmail = email 
+      ? email.trim().toLowerCase() 
+      : `${cleanUsername}@academy.xn.gg`;
+
+    const totalXp = Math.max(0, Math.floor(Number(initialXp) || 0));
+    const calculatedRank = calculateRank(totalXp);
+
+    const safeStats = {
+      kills: Math.max(0, Math.floor(Number(lifetimeStats?.kills) || 0)),
+      wins: Math.max(0, Math.floor(Number(lifetimeStats?.wins) || 0)),
+      matches: Math.max(0, Math.floor(Number(lifetimeStats?.matches) || 0)),
+      kd: Number(lifetimeStats?.kd) || 1.0,
+      winRate: Number(lifetimeStats?.winRate) || (lifetimeStats?.matches ? Math.round(((lifetimeStats.wins || 0) / lifetimeStats.matches) * 100) : 0)
+    };
+
+    const newPlayer: Player = {
+      id: `p-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      xnId: newXnId,
+      username: cleanUsername,
+      email: cleanEmail,
+      displayName: displayName.trim(),
+      ign: ign.trim().toUpperCase(),
+      role,
+      country: country ? country.trim() : 'GLOBAL',
+      bio: bio ? bio.trim() : 'Enrolled Operative in XN Academy Tactical Roster.',
+      avatarUrl: avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(newXnId)}`,
+      currentRank: calculatedRank,
+      peakRank: calculatedRank,
+      totalXp,
+      academyStatus: academyStatus || 'CADET',
+      verificationStatus: verificationStatus || 'VERIFIED',
+      joinedAt: new Date().toISOString(),
+      lifetimeStats: safeStats
+    };
+
+    dbPlayers.unshift(newPlayer);
+
+    // Create welcome notification
+    const welcomeNotif: AppNotification = {
+      id: `notif-${Date.now()}`,
+      recipientXnId: newXnId,
+      title: 'WELCOME TO XN ACADEMY ROSTER',
+      message: `You have been officially enrolled by ${adminUsername || 'Academy Command'}. Your permanent callsign is ${newXnId}.`,
+      type: 'system',
+      priority: 'urgent',
+      createdAt: new Date().toISOString(),
+      read: false,
+      linkView: 'profile',
+      sender: adminUsername || 'Academy Command'
+    };
+    dbNotifications.unshift(welcomeNotif);
+
+    // Audit log
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'OPERATIVE_ENROLLED_BY_ADMIN',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `New operative ${newPlayer.displayName} (${newPlayer.xnId} | ${newPlayer.ign}) enrolled by ${adminUsername || 'Command'}. Initial XP: ${totalXp} (${calculatedRank}).`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.status(201).json({
+      message: `Operative ${newPlayer.displayName} (${newPlayer.xnId}) successfully added to Academy Roster.`,
+      player: newPlayer,
+      auditLog: log
+    });
+  });
+
+  // --- ACADEMY OPERATIONS: REMOVE PLAYER FROM SYSTEM ---
+  app.delete('/api/admin/players/:xnId', (req: Request, res: Response) => {
+    const { xnId } = req.params;
+    const { reason, adminUsername } = req.body;
+
+    const playerIndex = dbPlayers.findIndex(p => p.xnId.toLowerCase() === xnId.toLowerCase());
+    if (playerIndex === -1) {
+      return res.status(404).json({ error: 'Operative not found in Academy Roster.' });
+    }
+
+    const removedPlayer = dbPlayers[playerIndex];
+    dbPlayers.splice(playerIndex, 1);
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'OPERATIVE_EXPELLED_BY_ADMIN',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Operative ${removedPlayer.displayName} (${removedPlayer.xnId} | IGN: ${removedPlayer.ign}) expelled from Academy by ${adminUsername || 'Command'}. Reason: ${reason || 'Administrative roster prune / conduct violation'}`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.json({
+      message: `Operative ${removedPlayer.displayName} (${removedPlayer.xnId}) removed from Academy System.`,
+      removedXnId: xnId,
+      auditLog: log
+    });
+  });
+
+  // --- LOCK & CALIBRATE TELEMETRY METRIC (BASED ON PLAYER REPORT) ---
+  app.post('/api/admin/players/:xnId/calibrate-telemetry', (req: Request, res: Response) => {
+    const { xnId } = req.params;
+    const {
+      kills,
+      wins,
+      matches,
+      kd,
+      winRate,
+      reportTicket,
+      reason,
+      adminUsername,
+      recalculateXp = false
+    } = req.body;
+
+    const playerIndex = dbPlayers.findIndex(p => p.xnId.toLowerCase() === xnId.toLowerCase());
+    if (playerIndex === -1) {
+      return res.status(404).json({ error: 'Operative not found in database.' });
+    }
+
+    const player = dbPlayers[playerIndex];
+    const oldStats = player.lifetimeStats || { kills: 0, wins: 0, matches: 0, kd: 1.0, winRate: 0 };
+
+    const newMatches = matches !== undefined ? Math.max(0, Math.floor(Number(matches))) : oldStats.matches;
+    const newWins = wins !== undefined ? Math.max(0, Math.floor(Number(wins))) : oldStats.wins;
+    const newKills = kills !== undefined ? Math.max(0, Math.floor(Number(kills))) : oldStats.kills;
+    const newKd = kd !== undefined ? parseFloat(Number(kd).toFixed(2)) : oldStats.kd;
+    
+    // Calculate cumulative win rate (wins / matches * 100) or explicit override
+    const calculatedWinRate = newMatches > 0 
+      ? parseFloat(((newWins / newMatches) * 100).toFixed(1)) 
+      : 0;
+    const newWinRate = winRate !== undefined ? parseFloat(Number(winRate).toFixed(1)) : calculatedWinRate;
+
+    const updatedLifetimeStats = {
+      kills: newKills,
+      wins: newWins,
+      matches: newMatches,
+      kd: newKd,
+      winRate: Math.min(100, Math.max(0, newWinRate))
+    };
+
+    let updatedXp = player.totalXp ?? 0;
+    let updatedRank = player.currentRank;
+
+    if (recalculateXp) {
+      // Calibrate total XP using clean metrics
+      updatedXp = Math.max(0, (newKills * 5) + (newWins * 25) + Math.round(newKd * 15));
+      updatedRank = calculateRank(updatedXp);
+    }
+
+    const updatedPlayer: Player = {
+      ...player,
+      lifetimeStats: updatedLifetimeStats,
+      totalXp: updatedXp,
+      currentRank: updatedRank,
+      peakRank: updatedRank > player.peakRank ? updatedRank : player.peakRank
+    };
+
+    dbPlayers[playerIndex] = updatedPlayer;
+
+    // Send notification to player device
+    const notif: AppNotification = {
+      id: `notif-${Date.now()}`,
+      recipientXnId: player.xnId,
+      title: 'TELEMETRY CALIBRATION VERIFIED',
+      message: `Your combat telemetry metrics have been calibrated by ${adminUsername || 'Academy Staff'}${reportTicket ? ` based on report #${reportTicket}` : ''}. [Matches: ${newMatches} | Wins: ${newWins} | Kills: ${newKills} | Win Rate: ${newWinRate}%]`,
+      type: 'telemetry',
+      priority: 'urgent',
+      createdAt: new Date().toISOString(),
+      read: false,
+      linkView: 'profile',
+      sender: adminUsername || 'Staff Officer'
+    };
+    dbNotifications.unshift(notif);
+
+    // Audit log
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'TELEMETRY_CALIBRATED_BY_ADMIN',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Telemetry calibrated for ${player.displayName} (${player.xnId}) by ${adminUsername || 'Command'}. Report: ${reportTicket || 'Direct Player Verification'}. Reason: ${reason || 'Stats adjustment request'}. Old: [M:${oldStats.matches}, W:${oldStats.wins}, K:${oldStats.kills}] -> New: [M:${newMatches}, W:${newWins}, K:${newKills}, WR:${newWinRate}%]`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    const { password: _, ...safePlayer } = updatedPlayer;
+    res.json({
+      message: `Telemetry metrics successfully calibrated for ${player.displayName}.`,
+      player: safePlayer,
+      notification: notif,
+      auditLog: log
+    });
+  });
+
+  // --- NOTIFICATIONS API ---
+  // GET notifications
+  app.get('/api/notifications', (req: Request, res: Response) => {
+    const { recipientXnId } = req.query;
+    let list = [...dbNotifications];
+
+    if (recipientXnId && String(recipientXnId).toUpperCase() !== 'ALL') {
+      const target = String(recipientXnId).toLowerCase();
+      list = list.filter(n => 
+        n.recipientXnId.toUpperCase() === 'ALL' || 
+        n.recipientXnId.toLowerCase() === target
+      );
+    }
+
+    res.json({ notifications: list, count: list.length });
+  });
+
+  // POST send notification (HoC / Admin broadcast or direct)
+  app.post('/api/notifications/send', (req: Request, res: Response) => {
+    const {
+      recipientXnId = 'ALL',
+      title,
+      message,
+      type = 'announcement',
+      priority = 'normal',
+      linkView = 'home',
+      sender = 'Academy Command'
+    } = req.body;
+
+    if (!title || !message) {
+      return res.status(400).json({ error: 'Title and message are required for notification broadcast.' });
+    }
+
+    const newNotif: AppNotification = {
+      id: `notif-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      recipientXnId: recipientXnId.trim().toUpperCase(),
+      title: title.trim(),
+      message: message.trim(),
+      type,
+      priority,
+      createdAt: new Date().toISOString(),
+      read: false,
+      linkView,
+      sender
+    };
+
+    dbNotifications.unshift(newNotif);
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'NOTIFICATION_BROADCAST_SENT',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `[${priority.toUpperCase()}] Notification "${title}" dispatched to ${recipientXnId} by ${sender}.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.status(201).json({
+      message: 'Notification successfully dispatched to operative devices.',
+      notification: newNotif,
+      auditLog: log
+    });
+  });
+
+  // POST mark notification as read
+  app.post('/api/notifications/:id/read', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const notifIndex = dbNotifications.findIndex(n => n.id === id);
+
+    if (notifIndex !== -1) {
+      dbNotifications[notifIndex].read = true;
+      saveDatabase();
+      return res.json({ success: true, notification: dbNotifications[notifIndex] });
+    }
+
+    res.status(404).json({ error: 'Notification not found' });
+  });
+
+  // POST mark all as read
+  app.post('/api/notifications/read-all', (req: Request, res: Response) => {
+    const { recipientXnId } = req.body;
+    dbNotifications = dbNotifications.map(n => {
+      if (!recipientXnId || n.recipientXnId === 'ALL' || n.recipientXnId.toLowerCase() === String(recipientXnId).toLowerCase()) {
+        return { ...n, read: true };
+      }
+      return n;
+    });
+    saveDatabase();
+    res.json({ success: true, message: 'All notifications marked as read' });
+  });
+
+  // DELETE notification
+  app.delete('/api/notifications/:id', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const initialLen = dbNotifications.length;
+    dbNotifications = dbNotifications.filter(n => n.id !== id);
+    if (dbNotifications.length !== initialLen) {
+      saveDatabase();
+      return res.json({ success: true, message: 'Notification cleared' });
+    }
+    res.status(404).json({ error: 'Notification not found' });
+  });
+
+  // --- ACADEMY EVENTS API ---
+  // GET events
+  app.get('/api/events', (req: Request, res: Response) => {
+    const list = dbEvents.filter(e => e.isActive !== false);
+    res.json({ events: list, count: list.length });
+  });
+
+  // POST create event (HoC / Admin)
+  app.post('/api/events', (req: Request, res: Response) => {
+    const {
+      title,
+      eventType = 'TOURNAMENT',
+      description,
+      rewardXp = 250,
+      scheduledDate,
+      targetRank = 'ALL',
+      targetRole = 'ALL',
+      createdBy = 'Academy Command',
+      broadcastPush = true
+    } = req.body;
+
+    if (!title || !description || !scheduledDate) {
+      return res.status(400).json({ error: 'Event title, description, and scheduled date are required.' });
+    }
+
+    const newEvent: AcademyEvent = {
+      id: `event-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      title: title.trim(),
+      eventType,
+      description: description.trim(),
+      rewardXp: Math.max(0, Math.floor(Number(rewardXp) || 0)),
+      scheduledDate: scheduledDate.trim(),
+      targetRank,
+      targetRole,
+      createdBy,
+      createdAt: new Date().toISOString(),
+      isActive: true
+    };
+
+    dbEvents.unshift(newEvent);
+
+    // Optionally broadcast notification to all devices
+    if (broadcastPush) {
+      const eventNotif: AppNotification = {
+        id: `notif-${Date.now()}`,
+        recipientXnId: 'ALL',
+        title: `EVENT: ${newEvent.title}`,
+        message: `${newEvent.eventType} scheduled for ${newEvent.scheduledDate}. Reward: +${newEvent.rewardXp} XP. ${newEvent.description}`,
+        type: 'event',
+        priority: 'urgent',
+        createdAt: new Date().toISOString(),
+        read: false,
+        linkView: 'operations',
+        sender: createdBy
+      };
+      dbNotifications.unshift(eventNotif);
+    }
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ACADEMY_EVENT_PUBLISHED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `New event "${newEvent.title}" (${newEvent.eventType}, +${newEvent.rewardXp} XP) published by ${createdBy}. Scheduled for ${newEvent.scheduledDate}.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.status(201).json({
+      message: `Event "${newEvent.title}" published to Academy Network.`,
+      event: newEvent,
+      auditLog: log
+    });
+  });
+
+  // DELETE event
+  app.delete('/api/events/:id', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { adminUsername } = req.body;
+    const eventIndex = dbEvents.findIndex(e => e.id === id);
+
+    if (eventIndex === -1) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const deletedEvent = dbEvents[eventIndex];
+    dbEvents.splice(eventIndex, 1);
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ACADEMY_EVENT_CANCELLED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Event "${deletedEvent.title}" cancelled by ${adminUsername || 'Command'}.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.json({
+      message: `Event "${deletedEvent.title}" removed from schedule.`,
+      event: deletedEvent,
       auditLog: log
     });
   });

@@ -24,8 +24,7 @@ export const SubmitSitrepView: React.FC = () => {
     wins: 2,
     matches: 3,
     kd: 3.5,
-    winRate: 66.7,
-    hs: 45.0
+    winRate: 66.7
   });
 
   const [evidencePreview, setEvidencePreview] = useState<string | null>(
@@ -40,17 +39,17 @@ export const SubmitSitrepView: React.FC = () => {
     {
       title: 'Competitive Match 1 (High K/D)',
       url: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800&auto=format&fit=crop',
-      stats: { kills: 18, wins: 3, matches: 4, kd: 4.5, winRate: 75.0, hs: 52.0 }
+      stats: { kills: 18, wins: 3, matches: 4, kd: 4.5, winRate: 75.0 }
     },
     {
       title: 'Tournament Finals (Sniper Ace)',
       url: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?q=80&w=800&auto=format&fit=crop',
-      stats: { kills: 24, wins: 2, matches: 3, kd: 6.0, winRate: 66.7, hs: 68.0 }
+      stats: { kills: 24, wins: 2, matches: 3, kd: 6.0, winRate: 66.7 }
     },
     {
       title: 'Scrim Session (Flagged Anomaly Test)',
       url: 'https://images.unsplash.com/photo-1538481199705-c710c4e965fc?q=80&w=800&auto=format&fit=crop',
-      stats: { kills: 42, wins: 2, matches: 2, kd: 21.0, winRate: 100.0, hs: 92.0 }
+      stats: { kills: 42, wins: 2, matches: 2, kd: 21.0, winRate: 100.0 }
     }
   ];
 
@@ -67,8 +66,7 @@ export const SubmitSitrepView: React.FC = () => {
         wins: Math.floor(1 + Math.random() * 3),
         matches: Math.floor(2 + Math.random() * 3),
         kd: parseFloat((2.0 + Math.random() * 3.5).toFixed(2)),
-        winRate: parseFloat((50 + Math.random() * 35).toFixed(1)),
-        hs: parseFloat((30 + Math.random() * 40).toFixed(1))
+        winRate: parseFloat((50 + Math.random() * 35).toFixed(1))
       });
     };
     reader.readAsDataURL(file);
@@ -79,13 +77,13 @@ export const SubmitSitrepView: React.FC = () => {
     setOcrStatus('Analyzing match screenshot telemetry...');
 
     setTimeout(() => {
-      setOcrStatus('Extracting kill counter, match outcome, and headshot vectors...');
+      setOcrStatus('Extracting kill counter, match outcome, and K/D performance vectors...');
     }, 600);
 
     setTimeout(() => {
       setStats(targetStats);
       setIsScanning(false);
-      setOcrStatus('OCR Analysis Complete! Values autofilled below.');
+      setOcrStatus('OCR Analysis Complete! Telemetry populated below.');
       showToast('Telemetry extracted successfully', 'success');
     }, 1200);
   };
@@ -250,12 +248,17 @@ export const SubmitSitrepView: React.FC = () => {
 
         {/* Step 2: Telemetry Values (Editable) */}
         <div className="space-y-4 pt-4 border-t border-slate-800/80">
-          <span className="font-mono text-xs font-bold text-slate-200 uppercase flex items-center gap-2">
-            <FileText className="w-4 h-4 text-orange-400" />
-            2. Match Telemetry Metrics
-          </span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <span className="font-mono text-xs font-bold text-slate-200 uppercase flex items-center gap-2">
+              <FileText className="w-4 h-4 text-orange-400" />
+              2. Match Telemetry Metrics
+            </span>
+            <span className="font-mono text-[10px] text-slate-400">
+              Official lifetime telemetry is locked & calibrated by Academy Staff upon review
+            </span>
+          </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <div>
               <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
                 Kills
@@ -286,7 +289,7 @@ export const SubmitSitrepView: React.FC = () => {
 
             <div>
               <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
-                Matches Played
+                Matches
               </label>
               <input
                 type="number"
@@ -313,7 +316,7 @@ export const SubmitSitrepView: React.FC = () => {
               />
             </div>
 
-            <div>
+            <div className="col-span-2 sm:col-span-1">
               <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
                 Win Rate %
               </label>
@@ -325,22 +328,6 @@ export const SubmitSitrepView: React.FC = () => {
                 value={stats.winRate}
                 onChange={(e) => setStats({ ...stats, winRate: parseFloat(e.target.value) || 0 })}
                 className="w-full p-2.5 bg-slate-900 border border-slate-800 focus:border-cyan-500 rounded font-mono text-sm text-amber-400 outline-none"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
-                Headshot %
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                min="0"
-                max="100"
-                value={stats.hs}
-                onChange={(e) => setStats({ ...stats, hs: parseFloat(e.target.value) || 0 })}
-                className="w-full p-2.5 bg-slate-900 border border-slate-800 focus:border-cyan-500 rounded font-mono text-sm text-red-400 outline-none"
                 required
               />
             </div>
@@ -358,11 +345,10 @@ export const SubmitSitrepView: React.FC = () => {
             </span>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono text-slate-400 pt-2 border-t border-slate-800">
-            <div>Kills: <b className="text-white">+{scoreBreakdown.killsXp} XP</b></div>
-            <div>Wins: <b className="text-white">+{scoreBreakdown.winBonus} XP</b></div>
-            <div>K/D Bonus: <b className="text-white">+{scoreBreakdown.kdBonus} XP</b></div>
-            <div>HS Bonus: <b className="text-white">+{scoreBreakdown.hsBonus} XP</b></div>
+          <div className="grid grid-cols-3 gap-2 text-[11px] font-mono text-slate-400 pt-2 border-t border-slate-800">
+            <div>Kills (5 XP/ea): <b className="text-white">+{scoreBreakdown.killsXp} XP</b></div>
+            <div>Wins (25 XP/ea): <b className="text-white">+{scoreBreakdown.winBonus} XP</b></div>
+            <div>K/D Rating (15 XP/pt): <b className="text-white">+{scoreBreakdown.kdBonus} XP</b></div>
           </div>
         </div>
 

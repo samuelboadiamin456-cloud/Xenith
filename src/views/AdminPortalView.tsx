@@ -57,6 +57,7 @@ export const AdminPortalView: React.FC = () => {
     deductXp,
     rewardPlayer,
     viewPlayerProfile,
+    setActiveView,
     showToast 
   } = useApp();
 
@@ -246,7 +247,16 @@ export const AdminPortalView: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Academy Operations Quick Nav */}
+          <button
+            onClick={() => setActiveView('operations')}
+            className="px-3.5 py-2 bg-gradient-to-r from-orange-500/20 to-purple-500/20 hover:from-orange-500/30 hover:to-purple-500/30 border border-orange-500/40 text-orange-300 font-mono text-xs font-bold uppercase rounded-lg transition-all flex items-center gap-2 cursor-pointer shadow-[0_0_15px_rgba(249,115,22,0.15)]"
+          >
+            <Zap className="w-3.5 h-3.5 text-orange-400" />
+            Academy Operations Portal
+          </button>
+
           {/* Admin Reward Clearance Indicator */}
           <div className={`px-3 py-1.5 rounded-lg border font-mono text-xs flex items-center gap-2 ${
             canRewardPlayers 

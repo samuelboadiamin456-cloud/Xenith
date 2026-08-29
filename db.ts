@@ -1,21 +1,21 @@
 import { Pool } from 'pg';
 
 const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  console.error('Missing DATABASE_URL env var. Set it to your Neon connection string before starting the server.');
-  process.exit(1);
-}
 
-// Neon requires SSL; rejectUnauthorized:false is standard for Neon's
-// pooled connection string (it presents a cert Node's default CA
-// bundle sometimes doesn't chain cleanly, this is Neon's documented
-// recommendation for serverless/node-postgres clients).
-export const pool = new Pool({
-  connectionString,
-  ssl: { rejectUnauthorized: false },
-});
+// Optional PostgreSQL pool for Neon/Cloud environments
+export const pool = connectionString
+  ? new Pool({
+      connectionString,
+      ssl: { rejectUnauthorized: false },
+    })
+  : null;
 
 export async function initSchema() {
+  if (!pool) {
+    console.log('[Storage] DATABASE_URL not set; running on persistent file/memory database storage.');
+    return;
+  }
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS players (
       id TEXT PRIMARY KEY,
@@ -91,6 +91,33 @@ export async function initSchema() {
       admin_id TEXT NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       expires_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      recipient_xn_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      type TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      read BOOLEAN NOT NULL DEFAULT false,
+      link_view TEXT,
+      sender TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS academy_events (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      description TEXT NOT NULL,
+      reward_xp INTEGER NOT NULL DEFAULT 100,
+      scheduled_date TEXT NOT NULL,
+      target_rank TEXT NOT NULL DEFAULT 'ALL',
+      target_role TEXT NOT NULL DEFAULT 'ALL',
+      created_by TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      is_active BOOLEAN NOT NULL DEFAULT true
     );
   `);
 }

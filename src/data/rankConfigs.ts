@@ -143,19 +143,18 @@ export function calculateSubmissionScore(stats: {
   matches: number;
   kd: number;
   winRate: number;
-  hs: number;
+  hs?: number;
 }) {
   const killsXp = Math.max(0, Math.round(Number(stats.kills) || 0)) * 5;
   const winBonus = Math.max(0, Math.round(Number(stats.wins) || 0)) * 25;
   const kdBonus = Math.round((Number(stats.kd) || 0) * 15);
-  const hsBonus = Math.round((Number(stats.hs) || 0) * 0.5);
-  const total = killsXp + winBonus + kdBonus + hsBonus;
+  const total = killsXp + winBonus + kdBonus;
 
   return {
     killsXp,
     winBonus,
     kdBonus,
-    hsBonus,
+    hsBonus: 0,
     total
   };
 }

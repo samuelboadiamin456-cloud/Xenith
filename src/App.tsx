@@ -11,6 +11,8 @@ import { EditProfileView } from './views/EditProfileView';
 import { RankJourneyModal } from './components/RankJourneyModal';
 import { AuthModal } from './views/AuthModal';
 import { InstallAppModal } from './components/InstallAppModal';
+import { NotificationModal } from './components/NotificationModal';
+import { AcademyOperationsView } from './views/AcademyOperationsView';
 import { Shield, Sparkles, CheckCircle2, AlertCircle, Info, Download, Smartphone } from 'lucide-react';
 
 const AppContent: React.FC = () => {
@@ -44,6 +46,8 @@ const AppContent: React.FC = () => {
         return <SubmitSitrepView />;
       case 'admin':
         return <AdminPortalView />;
+      case 'operations':
+        return <AcademyOperationsView />;
       case 'profile':
         return <PublicProfileView />;
       case 'edit-profile':
@@ -97,6 +101,9 @@ const AppContent: React.FC = () => {
           showToast('XN Academy installed successfully!', 'success');
         }}
       />
+
+      {/* Global Tactical Notifications Modal */}
+      <NotificationModal />
 
       {/* Toast Notification Alert */}
       {toastMessage && (

@@ -19,7 +19,7 @@ export interface LifetimeStats {
   matches: number;
   kd: number;
   winRate: number;
-  hs: number;
+  hs?: number;
 }
 
 export interface RankProgress {
@@ -82,14 +82,14 @@ export interface SubmissionStats {
   matches: number;
   kd: number;
   winRate: number;
-  hs: number;
+  hs?: number;
 }
 
 export interface ScoreBreakdown {
   killsXp: number;
   winBonus: number;
   kdBonus: number;
-  hsBonus: number;
+  hsBonus?: number;
   total: number;
 }
 
@@ -117,6 +117,33 @@ export interface AuditLog {
   details: string;
 }
 
+export interface AppNotification {
+  id: string;
+  recipientXnId: string; // 'ALL' or specific xnId
+  title: string;
+  message: string;
+  type: 'event' | 'sitrep' | 'reward' | 'announcement' | 'rank' | 'telemetry' | 'system';
+  priority: 'low' | 'normal' | 'urgent';
+  createdAt: string;
+  read: boolean;
+  linkView?: ActiveView;
+  sender: string;
+}
+
+export interface AcademyEvent {
+  id: string;
+  title: string;
+  eventType: 'TOURNAMENT' | 'SCRIMMAGE' | 'DOUBLE_XP' | 'WAR_ROOM' | 'DRILL' | 'TRIALS';
+  description: string;
+  rewardXp: number;
+  scheduledDate: string;
+  targetRank: string;
+  targetRole: string;
+  createdBy: string;
+  createdAt: string;
+  isActive: boolean;
+}
+
 export interface AdminStats {
   totalPlayers: number;
   activePlayers: number;
@@ -133,6 +160,7 @@ export type ActiveView =
   | 'dashboard' 
   | 'submit' 
   | 'admin' 
+  | 'operations'
   | 'search' 
   | 'profile' 
   | 'rank-journey'

@@ -17,7 +17,9 @@ import {
   Crown,
   Camera,
   Download,
-  Smartphone
+  Smartphone,
+  Bell,
+  Sliders
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { RankHexBadge } from './RankHexBadge';
@@ -37,7 +39,9 @@ export const Navbar: React.FC = () => {
     openAuthModal,
     adminRequests,
     openInstallModal,
-    isAppInstalled
+    isAppInstalled,
+    unreadNotificationsCount,
+    openNotificationModal
   } = useApp();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -146,6 +150,20 @@ export const Navbar: React.FC = () => {
             Rank Journey
           </button>
 
+          {isAdmin && (
+            <button
+              onClick={() => handleNav('operations')}
+              className={`px-3 py-1.5 rounded-md font-mono text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
+                activeView === 'operations'
+                  ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40 shadow-[0_0_12px_rgba(249,115,22,0.2)]'
+                  : 'text-slate-400 hover:text-orange-300 hover:bg-slate-800/50'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5 text-orange-400" />
+              Operations
+            </button>
+          )}
+
           <button
             onClick={() => handleNav('admin')}
             className={`px-3 py-1.5 rounded-md font-mono text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
@@ -164,8 +182,22 @@ export const Navbar: React.FC = () => {
           </button>
         </nav>
 
-        {/* Right Section: Identity Chip & Switcher */}
-        <div className="flex items-center gap-3">
+        {/* Right Section: Notification Bell, Install & Identity Chip */}
+        <div className="flex items-center gap-2.5">
+          {/* Notification Center Quick Bell Button */}
+          <button
+            onClick={openNotificationModal}
+            className="relative p-2 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/40 text-slate-300 hover:text-cyan-400 transition-all cursor-pointer"
+            title="Tactical Notifications & Device Push"
+          >
+            <Bell className="w-4 h-4" />
+            {unreadNotificationsCount > 0 && (
+              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-orange-500 text-slate-950 text-[9px] font-mono font-black flex items-center justify-center animate-pulse">
+                {unreadNotificationsCount}
+              </span>
+            )}
+          </button>
+
           {/* Install App Quick Trigger */}
           <button
             onClick={openInstallModal}
@@ -215,6 +247,14 @@ export const Navbar: React.FC = () => {
                       @{currentAdmin.username} · {currentAdmin.email}
                     </p>
                   </div>
+
+                  <button
+                    onClick={() => handleNav('operations')}
+                    className="w-full px-3 py-2 text-left font-mono text-xs text-orange-300 hover:bg-orange-500/10 rounded flex items-center gap-2 cursor-pointer"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-orange-400" />
+                    Academy Operations & Roster
+                  </button>
 
                   <button
                     onClick={() => handleNav('admin')}
@@ -403,6 +443,16 @@ export const Navbar: React.FC = () => {
           >
             Rank Journey
           </button>
+          {isAdmin && (
+            <button
+              onClick={() => handleNav('operations')}
+              className={`w-full text-left px-3 py-2.5 rounded font-mono text-xs font-bold uppercase tracking-wider ${
+                activeView === 'operations' ? 'bg-orange-500/20 text-orange-400' : 'text-slate-300'
+              }`}
+            >
+              Academy Operations
+            </button>
+          )}
           <button
             onClick={() => handleNav('admin')}
             className={`w-full text-left px-3 py-2.5 rounded font-mono text-xs font-bold uppercase tracking-wider ${
@@ -410,6 +460,23 @@ export const Navbar: React.FC = () => {
             }`}
           >
             Admin Portal ({pendingCount} pending)
+          </button>
+          <button
+            onClick={() => {
+              setMobileMenuOpen(false);
+              openNotificationModal();
+            }}
+            className="w-full text-left px-3 py-2.5 rounded font-mono text-xs font-bold uppercase tracking-wider text-orange-400 bg-orange-950/30 border border-orange-500/30 flex items-center justify-between"
+          >
+            <span className="flex items-center gap-2">
+              <Bell className="w-3.5 h-3.5" />
+              Tactical Notifications
+            </span>
+            {unreadNotificationsCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-orange-500 text-slate-950 font-black text-[10px]">
+                {unreadNotificationsCount} NEW
+              </span>
+            )}
           </button>
           <button
             onClick={() => {
@@ -429,3 +496,4 @@ export const Navbar: React.FC = () => {
     </header>
   );
 };
+

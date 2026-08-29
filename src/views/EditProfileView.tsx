@@ -145,7 +145,7 @@ export const EditProfileView: React.FC = () => {
           <div>
             <label className="block text-slate-400 uppercase mb-1">Operative Bio</label>
             <textarea
-              rows={4}
+              rows={3}
               value={bio}
               onChange={(e) => setBio(e.target.value)}
               placeholder="Share your competitive background and achievements..."
@@ -153,7 +153,41 @@ export const EditProfileView: React.FC = () => {
             />
           </div>
 
-          <div className="pt-4 flex gap-3">
+          {/* Locked Telemetry Notice */}
+          <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-[11px] font-bold text-slate-300 uppercase flex items-center gap-1.5">
+                <Shield className="w-3.5 h-3.5 text-cyan-400" />
+                Lifetime Combat Telemetry (Locked)
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 border border-cyan-500/40 text-cyan-300">
+                Staff Calibration Only
+              </span>
+            </div>
+            <div className="grid grid-cols-4 gap-2 text-[11px] font-mono text-center pt-1">
+              <div className="bg-slate-900/80 p-2 rounded border border-slate-800">
+                <span className="text-slate-500 block text-[10px]">MATCHES</span>
+                <span className="font-bold text-white">{currentPlayer.lifetimeStats.matches}</span>
+              </div>
+              <div className="bg-slate-900/80 p-2 rounded border border-slate-800">
+                <span className="text-slate-500 block text-[10px]">WINS</span>
+                <span className="font-bold text-emerald-400">{currentPlayer.lifetimeStats.wins}</span>
+              </div>
+              <div className="bg-slate-900/80 p-2 rounded border border-slate-800">
+                <span className="text-slate-500 block text-[10px]">KILLS</span>
+                <span className="font-bold text-white">{currentPlayer.lifetimeStats.kills}</span>
+              </div>
+              <div className="bg-slate-900/80 p-2 rounded border border-slate-800">
+                <span className="text-slate-500 block text-[10px]">WIN RATE</span>
+                <span className="font-bold text-amber-400">{currentPlayer.lifetimeStats.winRate}%</span>
+              </div>
+            </div>
+            <p className="text-[10px] text-slate-400 font-mono">
+              Note: Telemetry metrics cannot be modified directly. If you need stat adjustments, file a verification report with Academy Command for manual calibration.
+            </p>
+          </div>
+
+          <div className="pt-2 flex gap-3">
             <button
               type="submit"
               className="flex-1 py-3 bg-[#f4a261] hover:bg-[#ffb378] text-[#2b1400] font-display font-black text-xs uppercase tracking-wider chamfer-btn transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-[0_0_15px_rgba(244,162,97,0.3)]"
