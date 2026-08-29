@@ -76,19 +76,36 @@ export interface AdminRequest {
   reviewedBy?: string;
 }
 
+export type SitrepMode = 'BR' | 'SF' | 'CUSTOM';
+
 export interface SubmissionStats {
+  mode?: SitrepMode;
   kills: number;
-  wins: number;
-  matches: number;
-  kd: number;
-  winRate: number;
+  assists?: number;
+  deaths?: number;
+  damage?: number;
+  placement?: number; // For BR: 1, 2, 3, 4, 5+
+  placementText?: string; // e.g. "1/12 Victory", "#2/12"
+  outcome?: 'Victory' | 'Defeat'; // For SF and CUSTOM
+  highlightedIgn?: string;
+  cash?: number;
+  wins?: number;
+  matches?: number;
+  kd?: number;
+  winRate?: number;
   hs?: number;
 }
 
 export interface ScoreBreakdown {
+  mode?: SitrepMode;
   killsXp: number;
-  winBonus: number;
-  kdBonus: number;
+  assistsXp?: number;
+  deathsXp?: number;
+  damageXp?: number;
+  placementBonus?: number;
+  outcomeBonus?: number;
+  winBonus?: number;
+  kdBonus?: number;
   hsBonus?: number;
   total: number;
 }
@@ -101,6 +118,7 @@ export interface Submission {
   createdAt: string;
   status: 'pending' | 'approved' | 'rejected' | 'flagged';
   stats: SubmissionStats;
+  mode?: SitrepMode;
   evidenceUrl?: string;
   fraudFlags: string[];
   scoreBreakdown: ScoreBreakdown;

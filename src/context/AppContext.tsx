@@ -946,9 +946,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     
     // Fraud checks
     const fraudFlags: string[] = [];
-    if (stats.kd > 12.0) fraudFlags.push('Extreme K/D Anomaly (>12.0)');
-    if (stats.hs > 85.0) fraudFlags.push('Abnormal Headshot Ratio (>85%)');
-    if (stats.winRate > 95 && stats.matches > 5) fraudFlags.push('Unusually High Win Rate (>95%)');
+    if (stats.kd && stats.kd > 15.0) fraudFlags.push('Extreme K/D Anomaly (>15.0)');
+    if (stats.kills && stats.kills > 35) fraudFlags.push('Unusually High Kill Count (>35 kills in single match)');
+    if (stats.winRate && stats.winRate > 95 && (stats.matches || 1) > 5) fraudFlags.push('Unusually High Win Rate (>95%)');
 
     try {
       if (player) {
@@ -957,6 +957,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           playerName: player.displayName,
           playerIgn: player.ign,
           stats,
+          mode: stats.mode || 'BR',
           evidenceUrl
         });
 
@@ -965,7 +966,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (result.auditLog) {
           setAuditLogs(prev => [result.auditLog!, ...prev]);
         }
-        showToast(`SITREP ${newSub.id} submitted to review queue`, 'success');
+        showToast(`SITREP ${newSub.id} [${stats.mode || 'BR'}] submitted (+${score.total} XP pending review)`, 'success');
         return newSub;
       }
     } catch {
@@ -980,6 +981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
       status: fraudFlags.length > 0 ? 'flagged' : 'pending',
       stats,
+      mode: stats.mode || 'BR',
       evidenceUrl: evidenceUrl || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800&auto=format&fit=crop',
       fraudFlags,
       scoreBreakdown: score
@@ -992,11 +994,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       action: fraudFlags.length > 0 ? 'SITREP_FLAGGED' : 'SITREP_SUBMITTED',
       timestamp: new Date().toISOString(),
       actorType: 'system',
-      details: `${newSub.id} from ${newSub.playerName} (${newSub.xnId}) queued for review. ${fraudFlags.length ? `Flags: ${fraudFlags.join(', ')}` : ''}`
+      details: `${newSub.id} [${stats.mode || 'BR'}] from ${newSub.playerName} (${newSub.xnId}) queued for review. ${fraudFlags.length ? `Flags: ${fraudFlags.join(', ')}` : ''}`
     };
     setAuditLogs(prev => [log, ...prev]);
 
-    showToast(`SITREP ${newSub.id} submitted to review queue`, 'success');
+    showToast(`SITREP ${newSub.id} [${stats.mode || 'BR'}] submitted (+${score.total} XP pending review)`, 'success');
     return newSub;
   };
 

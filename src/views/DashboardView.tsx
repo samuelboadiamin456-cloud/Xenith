@@ -334,12 +334,26 @@ export const DashboardView: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-bold text-white uppercase">{sub.id}</span>
+                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono font-black uppercase ${
+                        (sub.mode || sub.stats.mode) === 'SF' 
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' 
+                          : (sub.mode || sub.stats.mode) === 'CUSTOM'
+                          ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                          : 'bg-orange-500/20 text-orange-300 border border-orange-500/40'
+                      }`}>
+                        {sub.mode || sub.stats.mode || 'BR'}
+                      </span>
                       <span className="text-slate-500 text-[10px]">
                         {new Date(sub.createdAt).toLocaleDateString()}
                       </span>
                     </div>
                     <span className="text-slate-400 text-[11px] block mt-0.5">
-                      Kills: <b className="text-white">{sub.stats.kills}</b> · Wins: <b className="text-white">{sub.stats.wins}</b> · K/D: <b className="text-cyan-400">{sub.stats.kd}</b>
+                      Kills: <b className="text-white">{sub.stats.kills}</b>
+                      {sub.stats.assists !== undefined && <> · Ast: <b className="text-cyan-300">{sub.stats.assists}</b></>}
+                      {sub.stats.deaths !== undefined && <> · Dth: <b className="text-red-400">{sub.stats.deaths}</b></>}
+                      {sub.stats.damage !== undefined && <> · Dmg: <b className="text-amber-300">{sub.stats.damage.toLocaleString()}</b></>}
+                      {sub.stats.placementText && <> · Pos: <b className="text-emerald-400">{sub.stats.placementText}</b></>}
+                      {sub.stats.outcome && !sub.stats.placementText && <> · <b className={sub.stats.outcome === 'Victory' ? 'text-emerald-400' : 'text-red-400'}>{sub.stats.outcome}</b></>}
                     </span>
                   </div>
                 </div>

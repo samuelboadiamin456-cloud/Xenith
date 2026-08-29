@@ -156,11 +156,12 @@ export const api = {
   },
 
   // Submissions API
-  async getSubmissions(params?: { status?: string; xnId?: string }): Promise<Submission[]> {
+  async getSubmissions(params?: { status?: string; xnId?: string; mode?: string }): Promise<Submission[]> {
     try {
       const query = new URLSearchParams();
       if (params?.status && params.status !== 'ALL') query.set('status', params.status);
       if (params?.xnId) query.set('xnId', params.xnId);
+      if (params?.mode && params.mode !== 'ALL') query.set('mode', params.mode);
 
       const res = await fetch(`/api/submissions?${query.toString()}`);
       if (!res.ok) throw new Error('Failed to fetch submissions');
@@ -177,6 +178,7 @@ export const api = {
     playerName?: string;
     playerIgn?: string;
     stats: SubmissionStats;
+    mode?: 'BR' | 'SF' | 'CUSTOM';
     evidenceUrl?: string;
   }): Promise<{ submission: Submission; auditLog?: AuditLog }> {
     const res = await fetch('/api/submissions', {
@@ -187,6 +189,43 @@ export const api = {
 
     if (!res.ok) {
       throw new Error('Failed to submit performance report');
+    }
+
+    return await res.json();
+  },
+
+  async scanSitrepOcr(data: {
+    image: string;
+    mode: 'BR' | 'SF' | 'CUSTOM';
+  }): Promise<{
+    success: boolean;
+    valid: boolean;
+    rejectionReason?: string;
+    mode: 'BR' | 'SF' | 'CUSTOM';
+    extracted?: {
+      highlightedIgn: string;
+      kills: number;
+      assists?: number;
+      deaths?: number;
+      damage: number;
+      placement?: number;
+      placementText?: string;
+      outcome?: 'Victory' | 'Defeat';
+      cash?: number;
+      teamFormat?: string;
+    };
+    scoreBreakdown?: any;
+    message?: string;
+  }> {
+    const res = await fetch('/api/ocr/scan-sitrep', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || 'OCR server request failed');
     }
 
     return await res.json();

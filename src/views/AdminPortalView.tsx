@@ -675,7 +675,18 @@ export const AdminPortalView: React.FC = () => {
                       </div>
 
                       <div className="min-w-0">
-                        <span className="font-mono text-[10px] text-cyan-400 font-bold block">{sub.xnId}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[10px] text-cyan-400 font-bold block">{sub.xnId}</span>
+                          <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono font-black uppercase ${
+                            (sub.mode || sub.stats.mode) === 'SF' 
+                              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' 
+                              : (sub.mode || sub.stats.mode) === 'CUSTOM'
+                              ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                              : 'bg-orange-500/20 text-orange-300 border border-orange-500/40'
+                          }`}>
+                            {sub.mode || sub.stats.mode || 'BR'}
+                          </span>
+                        </div>
                         <h3 className="font-display text-base font-bold text-white uppercase truncate">{sub.playerName}</h3>
                         <span className="font-mono text-[11px] text-slate-400 block">IGN: {sub.playerIgn}</span>
                       </div>
@@ -687,15 +698,31 @@ export const AdminPortalView: React.FC = () => {
                         <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
                           Kills: <b className="text-white">{sub.stats.kills}</b>
                         </span>
-                        <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                          Wins: <b className="text-emerald-400">{sub.stats.wins}</b>
-                        </span>
-                        <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                          K/D: <b className="text-cyan-400">{sub.stats.kd}</b>
-                        </span>
-                        <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                          HS: <b className="text-red-400">{sub.stats.hs}%</b>
-                        </span>
+                        {sub.stats.assists !== undefined && (
+                          <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                            Ast: <b className="text-cyan-300">{sub.stats.assists}</b>
+                          </span>
+                        )}
+                        {sub.stats.deaths !== undefined && (
+                          <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                            Dth: <b className="text-red-400">{sub.stats.deaths}</b>
+                          </span>
+                        )}
+                        {sub.stats.damage !== undefined && (
+                          <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                            Dmg: <b className="text-amber-300">{sub.stats.damage.toLocaleString()}</b>
+                          </span>
+                        )}
+                        {sub.stats.placementText && (
+                          <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                            Pos: <b className="text-emerald-400">{sub.stats.placementText}</b>
+                          </span>
+                        )}
+                        {sub.stats.outcome && !sub.stats.placementText && (
+                          <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                            Outcome: <b className={sub.stats.outcome === 'Victory' ? 'text-emerald-400' : 'text-red-400'}>{sub.stats.outcome}</b>
+                          </span>
+                        )}
                       </div>
 
                       {/* Fraud Flags Alert */}
