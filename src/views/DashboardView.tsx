@@ -77,7 +77,12 @@ export const DashboardView: React.FC = () => {
 
   const p = currentPlayer;
   const progress = getRankProgress(p.totalXp);
-  const playerSubmissions = submissions.filter(s => s.xnId === p.xnId);
+  const playerSubmissions = submissions.filter(
+    s =>
+      (s.xnId && p.xnId && s.xnId.trim().toLowerCase() === p.xnId.trim().toLowerCase()) ||
+      (s.playerIgn && p.ign && s.playerIgn.trim().toLowerCase() === p.ign.trim().toLowerCase()) ||
+      (s.playerName && p.displayName && s.playerName.trim().toLowerCase() === p.displayName.trim().toLowerCase())
+  );
   const config = RANK_CONFIGS[p.currentRank];
 
   const handleCopyXnId = () => {

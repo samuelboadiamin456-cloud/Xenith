@@ -381,11 +381,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (isMounted) {
           if (serverPlayers && serverPlayers.length > 0) {
             setPlayers(serverPlayers);
+            // Refresh currentPlayer state from latest server records if logged in
+            setCurrentPlayer(prev => {
+              if (!prev) return null;
+              const prevXnId = (prev.xnId || '').trim().toLowerCase();
+              const prevId = (prev.id || '').trim().toLowerCase();
+              const prevUser = (prev.username || '').trim().toLowerCase();
+              const matched = serverPlayers.find(
+                p =>
+                  (p.xnId && p.xnId.trim().toLowerCase() === prevXnId) ||
+                  (p.id && p.id.trim().toLowerCase() === prevId) ||
+                  (p.username && p.username.trim().toLowerCase() === prevUser)
+              );
+              return matched ? { ...prev, ...matched } : prev;
+            });
           }
-          if (serverSubs && serverSubs.length > 0) {
+          if (serverSubs) {
             setSubmissions(serverSubs);
           }
-          if (serverLogs && serverLogs.length > 0) {
+          if (serverLogs) {
             setAuditLogs(serverLogs);
           }
           if (status) {
@@ -403,8 +417,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     fetchBackendData();
+
+    // Background interval & window focus synchronization
+    const syncInterval = setInterval(async () => {
+      if (!isMounted) return;
+      try {
+        const fullState = await api.getFullState();
+        if (fullState && isMounted) {
+          if (fullState.players && fullState.players.length > 0) {
+            setPlayers(fullState.players);
+            setCurrentPlayer(prev => {
+              if (!prev) return null;
+              const prevXnId = (prev.xnId || '').trim().toLowerCase();
+              const prevId = (prev.id || '').trim().toLowerCase();
+              const prevUser = (prev.username || '').trim().toLowerCase();
+              const matched = fullState.players.find(
+                p =>
+                  (p.xnId && p.xnId.trim().toLowerCase() === prevXnId) ||
+                  (p.id && p.id.trim().toLowerCase() === prevId) ||
+                  (p.username && p.username.trim().toLowerCase() === prevUser)
+              );
+              return matched ? { ...prev, ...matched } : prev;
+            });
+          }
+          if (fullState.submissions) setSubmissions(fullState.submissions);
+          if (fullState.auditLogs) setAuditLogs(fullState.auditLogs);
+          if (fullState.notifications) setNotifications(fullState.notifications);
+          if (fullState.events) setEvents(fullState.events);
+          if (fullState.adminStatus) setAdminStatus(fullState.adminStatus);
+          if (fullState.adminRequests) setAdminRequests(fullState.adminRequests);
+        }
+      } catch {
+        // silent sync
+      }
+    }, 6000);
+
+    const onFocus = () => fetchBackendData();
+    window.addEventListener('focus', onFocus);
+
     return () => {
       isMounted = false;
+      clearInterval(syncInterval);
+      window.removeEventListener('focus', onFocus);
     };
   }, []);
 
@@ -774,22 +828,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSubmissions(prev => prev.map(s => s.id === submissionId ? result.submission : s));
       }
       if (result.player) {
-        setPlayers(prev => prev.map(p => p.xnId === result.player!.xnId ? result.player! : p));
-        if (currentPlayer?.xnId === result.player.xnId) {
-          setCurrentPlayer(result.player);
+        setPlayers(prev => prev.map(p => (p.xnId.toLowerCase() === result.player!.xnId.toLowerCase() ? result.player! : p)));
+        setCurrentPlayer(prev => {
+          if (!prev) return null;
+          if (
+            prev.xnId.toLowerCase() === result.player!.xnId.toLowerCase() ||
+            prev.id === result.player!.id ||
+            (prev.username && prev.username.toLowerCase() === result.player!.username?.toLowerCase())
+          ) {
+            return result.player!;
+          }
+          return prev;
+        });
+
+        // Trigger rank celebration if rank elevated
+        if (currentPlayer && currentPlayer.xnId.toLowerCase() === result.player.xnId.toLowerCase()) {
+          if (RANK_CONFIGS[result.player.currentRank].minXp > RANK_CONFIGS[currentPlayer.currentRank].minXp) {
+            triggerRankCelebration(result.player.currentRank);
+          }
         }
       }
       if (result.auditLog) {
         setAuditLogs(prev => [result.auditLog!, ...prev]);
       }
-      showToast(`Submission ${submissionId} Approved (+${sub.scoreBreakdown.total} XP)`, 'success');
+      showToast(`SITREP ${submissionId} Approved (+${sub.scoreBreakdown?.total ?? 0} XP)`, 'success');
       return;
-    } catch {
-      // Fallback
+    } catch (err: any) {
+      console.warn('[Approval API Fallback]', err);
     }
 
-    const awardedXp = sub.scoreBreakdown.total;
-    const targetPlayer = players.find(p => p.xnId === sub.xnId);
+    const awardedXp = sub.scoreBreakdown?.total ?? 0;
+    const subXnId = (sub.xnId || '').trim().toLowerCase();
+    const subIgn = (sub.playerIgn || '').trim().toLowerCase();
+    const subName = (sub.playerName || '').trim().toLowerCase();
+
+    const targetPlayer = players.find(
+      p =>
+        (p.xnId && p.xnId.trim().toLowerCase() === subXnId) ||
+        (p.id && p.id.trim().toLowerCase() === subXnId) ||
+        (p.username && p.username.trim().toLowerCase() === subXnId) ||
+        (p.ign && p.ign.trim().toLowerCase() === subIgn) ||
+        (p.displayName && p.displayName.trim().toLowerCase() === subName)
+    );
 
     setSubmissions(prev => prev.map(s => 
       s.id === submissionId 
@@ -798,24 +878,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ));
 
     if (targetPlayer) {
-      const newTotalXp = targetPlayer.totalXp + awardedXp;
+      const newTotalXp = (targetPlayer.totalXp ?? 0) + awardedXp;
       const oldRank = targetPlayer.currentRank;
       const newRank = calculateRank(newTotalXp);
 
-      const oldStats = targetPlayer.lifetimeStats;
-      const totalMatches = oldStats.matches + sub.stats.matches;
-      const totalWins = oldStats.wins + sub.stats.wins;
-      const totalKills = oldStats.kills + sub.stats.kills;
-      const updatedKd = totalMatches > 0 ? parseFloat((totalKills / Math.max(1, totalMatches * 0.8)).toFixed(2)) : sub.stats.kd;
-      const updatedWinRate = totalMatches > 0 ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) : sub.stats.winRate;
-      const updatedHs = parseFloat(((oldStats.hs + sub.stats.hs) / 2).toFixed(1));
+      const oldStats = targetPlayer.lifetimeStats || { kills: 0, wins: 0, matches: 0, kd: 0, winRate: 0, hs: 0 };
+      const subMatches = sub.stats?.matches || 1;
+      const totalMatches = (oldStats.matches || 0) + subMatches;
+      const subWins = sub.stats?.wins !== undefined ? sub.stats.wins : (sub.stats?.outcome === 'Victory' || sub.stats?.placement === 1 ? 1 : 0);
+      const totalWins = (oldStats.wins || 0) + subWins;
+      const totalKills = (oldStats.kills || 0) + (sub.stats?.kills || 0);
+      const updatedKd = totalMatches > 0 ? parseFloat((totalKills / Math.max(1, totalMatches * 0.8)).toFixed(2)) : (Number(sub.stats?.kd) || 0);
+      const updatedWinRate = totalMatches > 0 ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) : 0;
+      const updatedHs = parseFloat((((oldStats.hs || 0) + (sub.stats?.hs || 0)) / 2).toFixed(1));
 
       const updatedPlayer: Player = {
         ...targetPlayer,
         totalXp: newTotalXp,
         currentRank: newRank,
-        peakRank: (RANK_CONFIGS[newRank].minXp > RANK_CONFIGS[targetPlayer.peakRank].minXp) ? newRank : targetPlayer.peakRank,
+        peakRank: (RANK_CONFIGS[newRank].minXp > RANK_CONFIGS[targetPlayer.peakRank || 'E'].minXp) ? newRank : targetPlayer.peakRank,
         lifetimeStats: {
+          ...oldStats,
           kills: totalKills,
           wins: totalWins,
           matches: totalMatches,
@@ -827,7 +910,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setPlayers(prev => prev.map(p => (p.xnId === targetPlayer.xnId ? updatedPlayer : p)));
 
-      if (currentPlayer?.xnId === targetPlayer.xnId) {
+      if (currentPlayer && (
+        currentPlayer.xnId.toLowerCase() === targetPlayer.xnId.toLowerCase() ||
+        currentPlayer.id === targetPlayer.id
+      )) {
         setCurrentPlayer(updatedPlayer);
       }
 

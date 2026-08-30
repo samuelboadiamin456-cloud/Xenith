@@ -1058,7 +1058,15 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   app.post('/api/submissions', (req: Request, res: Response) => {
     const { xnId, stats, mode = 'BR', evidenceUrl } = req.body;
 
-    const player = dbPlayers.find(p => p.xnId.toLowerCase() === (xnId || '').toLowerCase());
+    const cleanXnId = (xnId || '').trim().toLowerCase();
+    const player = dbPlayers.find(
+      p =>
+        (p.xnId && p.xnId.trim().toLowerCase() === cleanXnId) ||
+        (p.id && p.id.trim().toLowerCase() === cleanXnId) ||
+        (p.username && p.username.trim().toLowerCase() === cleanXnId) ||
+        (p.ign && p.ign.trim().toLowerCase() === cleanXnId)
+    );
+    const resolvedXnId = player ? player.xnId : (xnId || 'XN-UNKNOWN');
     const playerName = player ? player.displayName : req.body.playerName || 'Recruit Operative';
     const playerIgn = player ? player.ign : req.body.playerIgn || 'OPERATIVE';
 
@@ -1089,7 +1097,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
 
     const newSub: Submission = {
       id: `sub-${Math.floor(1000 + Math.random() * 9000)}`,
-      xnId: xnId || (player ? player.xnId : 'XN-UNKNOWN'),
+      xnId: resolvedXnId,
       playerName,
       playerIgn,
       createdAt: new Date().toISOString(),
@@ -1116,7 +1124,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
     res.status(201).json({ submission: newSub, auditLog: log });
   });
 
-  // POST approve submission (Updates cumulative win rate & rank thresholds)
+  // POST approve submission (Updates cumulative win rate, XP & rank thresholds)
   app.post('/api/submissions/:id/approve', requireAdmin, (req: Request, res: Response) => {
     const { id } = req.params;
     const subIndex = dbSubmissions.findIndex(s => s.id === id);
@@ -1130,13 +1138,33 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       return res.status(400).json({ error: 'Submission is already approved' });
     }
 
-    const awardedXp = sub.scoreBreakdown.total;
-    const targetPlayerIndex = dbPlayers.findIndex(p => p.xnId === sub.xnId);
+    const awardedXp = sub.scoreBreakdown?.total ?? calculateSubmissionScore(sub.stats).total;
+    
+    // Find target player with comprehensive case-insensitive and identifier matching
+    const subXnId = (sub.xnId || '').trim().toLowerCase();
+    const subPlayerName = (sub.playerName || '').trim().toLowerCase();
+    const subPlayerIgn = (sub.playerIgn || '').trim().toLowerCase();
+
+    let targetPlayerIndex = dbPlayers.findIndex(p => {
+      const pXnId = (p.xnId || '').trim().toLowerCase();
+      const pId = (p.id || '').trim().toLowerCase();
+      const pUsername = (p.username || '').trim().toLowerCase();
+      const pIgn = (p.ign || '').trim().toLowerCase();
+      const pName = (p.displayName || '').trim().toLowerCase();
+
+      return (
+        (pXnId && subXnId && pXnId === subXnId) ||
+        (pId && subXnId && pId === subXnId) ||
+        (pUsername && subXnId && pUsername === subXnId) ||
+        (pIgn && subPlayerIgn && pIgn === subPlayerIgn) ||
+        (pName && subPlayerName && pName === subPlayerName)
+      );
+    });
 
     const updatedSub: Submission = {
       ...sub,
       status: 'approved',
-      reviewedBy: req.body.reviewedBy || 'Admin_Lead',
+      reviewedBy: req.body.reviewedBy || (req as any).admin?.displayName || 'Admin_Lead',
       reviewedAt: new Date().toISOString()
     };
     dbSubmissions[subIndex] = updatedSub;
@@ -1148,23 +1176,30 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       const newTotalXp = (targetPlayer.totalXp ?? 0) + awardedXp;
       const newRank = calculateRank(newTotalXp);
 
-      const oldStats = targetPlayer.lifetimeStats || { kills: 0, wins: 0, matches: 0, kd: 0, winRate: 0 };
-      const totalMatches = (oldStats.matches || 0) + (sub.stats.matches || 1);
-      const totalWins = (oldStats.wins || 0) + (sub.stats.wins || 0);
-      const totalKills = (oldStats.kills || 0) + (sub.stats.kills || 0);
-      const updatedKd = totalMatches > 0 ? parseFloat((totalKills / Math.max(1, totalMatches * 0.8)).toFixed(2)) : sub.stats.kd;
+      const oldStats = targetPlayer.lifetimeStats || { kills: 0, wins: 0, matches: 0, kd: 0, winRate: 0, hs: 0 };
+      const subMatches = sub.stats?.matches || 1;
+      const totalMatches = (oldStats.matches || 0) + subMatches;
+      const subWins = sub.stats?.wins !== undefined ? sub.stats.wins : (sub.stats?.outcome === 'Victory' || sub.stats?.placement === 1 ? 1 : 0);
+      const totalWins = (oldStats.wins || 0) + subWins;
+      const totalKills = (oldStats.kills || 0) + (sub.stats?.kills || 0);
       
-      // Cumulative win rate calculation: totalWins / totalMatches * 100
+      const updatedKd = totalMatches > 0 ? parseFloat((totalKills / Math.max(1, totalMatches * 0.8)).toFixed(2)) : (Number(sub.stats?.kd) || 0);
       const updatedWinRate = totalMatches > 0 
         ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) 
         : 0;
+
+      const rankTiersOrder: RankTier[] = ['E', 'D', 'C', 'B', 'A', 'S', 'S-MAX'];
+      const oldPeakIndex = rankTiersOrder.indexOf(targetPlayer.peakRank || 'E');
+      const newRankIndex = rankTiersOrder.indexOf(newRank);
+      const peakRank = newRankIndex > oldPeakIndex ? newRank : (targetPlayer.peakRank || newRank);
 
       updatedPlayer = {
         ...targetPlayer,
         totalXp: newTotalXp,
         currentRank: newRank,
-        peakRank: newRank > targetPlayer.peakRank ? newRank : targetPlayer.peakRank,
+        peakRank: peakRank,
         lifetimeStats: {
+          ...oldStats,
           kills: totalKills,
           wins: totalWins,
           matches: totalMatches,
@@ -1174,6 +1209,37 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       };
 
       dbPlayers[targetPlayerIndex] = updatedPlayer;
+
+      // Create operative in-app notification
+      const notif: AppNotification = {
+        id: `notif-${Date.now()}`,
+        title: 'SITREP Telemetry Approved',
+        message: `Your SITREP (${sub.id} - ${sub.mode || 'BR'}) was verified and approved by ${updatedSub.reviewedBy}. +${awardedXp} XP awarded. Your total is now ${newTotalXp.toLocaleString()} XP (${newRank} Rank).`,
+        createdAt: new Date().toISOString(),
+        type: 'sitrep',
+        priority: 'urgent',
+        read: false,
+        recipientXnId: targetPlayer.xnId,
+        linkView: 'dashboard',
+        sender: updatedSub.reviewedBy
+      };
+      dbNotifications.unshift(notif);
+
+      if (newRank !== targetPlayer.currentRank && newRankIndex > rankTiersOrder.indexOf(targetPlayer.currentRank || 'E')) {
+        const promotionNotif: AppNotification = {
+          id: `notif-promo-${Date.now()}`,
+          title: `🎉 Rank Ascended: ${newRank} Tier!`,
+          message: `Operative ${targetPlayer.displayName}, your clearance has ascended to ${newRank} Rank (${newTotalXp.toLocaleString()} XP). Inspect your updated dossier HUD.`,
+          createdAt: new Date().toISOString(),
+          type: 'rank',
+          priority: 'urgent',
+          read: false,
+          recipientXnId: targetPlayer.xnId,
+          linkView: 'dashboard',
+          sender: 'Head of Command'
+        };
+        dbNotifications.unshift(promotionNotif);
+      }
     }
 
     const log: AuditLog = {
