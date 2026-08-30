@@ -26,6 +26,7 @@ import { useApp } from '../context/AppContext';
 import { calculateSubmissionScore } from '../data/rankConfigs';
 import { SubmissionStats, SitrepMode } from '../types';
 import { api } from '../services/api';
+import { compressScreenshot } from '../utils/imageCompressor';
 
 export const SubmitSitrepView: React.FC = () => {
   const { currentPlayer, createSubmission, setActiveView, showToast, openAuthModal, refreshPlayers } = useApp();
@@ -241,13 +242,21 @@ export const SubmitSitrepView: React.FC = () => {
     setRejectionError(null);
     setFraudPenaltyAlert(null);
     setModeMismatchAlert(null);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64Img = reader.result as string;
-      setEvidencePreview(base64Img);
-      await executeOcrScan(base64Img, activeMode);
-    };
-    reader.readAsDataURL(file);
+    try {
+      // Compress and optimize screenshot to ensure fast upload and crisp OCR
+      const optimizedBase64 = await compressScreenshot(file, 1400, 0.85);
+      setEvidencePreview(optimizedBase64);
+      await executeOcrScan(optimizedBase64, activeMode);
+    } catch (err) {
+      console.warn('[Screenshot Upload/Compression Error]', err);
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64Img = reader.result as string;
+        setEvidencePreview(base64Img);
+        await executeOcrScan(base64Img, activeMode);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const executeOcrScan = async (imgData: string, mode: SitrepMode, overrideIgn?: string) => {

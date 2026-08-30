@@ -17,6 +17,19 @@ import { INITIAL_PLAYERS, INITIAL_SUBMISSIONS, INITIAL_AUDIT_LOGS } from '../dat
 import { calculateRank, calculateSubmissionScore, RANK_CONFIGS } from '../data/rankConfigs';
 import { api, clearAdminToken } from '../services/api';
 import { notificationService } from '../services/notificationService';
+import {
+  safeStorageGet,
+  safeStorageGetString,
+  safeStorageSet,
+  safeStorageRemove,
+  sanitizeSubmissionsForStorage,
+  sanitizePlayersForStorage,
+  sanitizeLogsForStorage,
+  initializeStorageHealthCheck
+} from '../utils/storage';
+
+// Run storage cleanup immediately on app load to clear any previously clogged keys
+initializeStorageHealthCheck();
 
 interface AppContextType {
   players: Player[];
@@ -192,86 +205,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [players, setPlayers] = useState<Player[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_PLAYERS);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter(p => !isDemoSeedPlayer(p));
-        }
-      } catch {
-        return [];
-      }
-    }
-    return [];
+    const parsed = safeStorageGet<Player[]>(STORAGE_KEY_PLAYERS, []);
+    return Array.isArray(parsed) ? parsed.filter(p => !isDemoSeedPlayer(p)) : [];
   });
 
   const [submissions, setSubmissions] = useState<Submission[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_SUBS);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((s: Submission) => !s.id?.startsWith('sub-9021') && !s.id?.startsWith('sub-8842') && !s.id?.startsWith('sub-7612'));
-        }
-      } catch {
-        return [];
-      }
-    }
-    return [];
+    const parsed = safeStorageGet<Submission[]>(STORAGE_KEY_SUBS, []);
+    return Array.isArray(parsed)
+      ? parsed.filter((s: Submission) => !s.id?.startsWith('sub-9021') && !s.id?.startsWith('sub-8842') && !s.id?.startsWith('sub-7612'))
+      : [];
   });
 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_LOGS);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((l: AuditLog) => !l.id?.startsWith('log-seed-'));
-        }
-      } catch {
-        return [];
-      }
-    }
-    return [];
+    const parsed = safeStorageGet<AuditLog[]>(STORAGE_KEY_LOGS, []);
+    return Array.isArray(parsed)
+      ? parsed.filter((l: AuditLog) => !l.id?.startsWith('log-seed-'))
+      : [];
   });
 
   const [currentPlayer, setCurrentPlayer] = useState<Player | null>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_USER);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (isDemoSeedPlayer(parsed)) {
-          localStorage.removeItem(STORAGE_KEY_USER);
-          return null;
-        }
-        return parsed;
-      } catch {
-        return null;
-      }
+    const parsed = safeStorageGet<Player | null>(STORAGE_KEY_USER, null);
+    if (parsed && isDemoSeedPlayer(parsed)) {
+      safeStorageRemove(STORAGE_KEY_USER);
+      return null;
     }
-    return null;
+    return parsed;
   });
 
   const [currentAdmin, setCurrentAdmin] = useState<AdminUser | null>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_ADMIN_USER);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return null;
-      }
-    }
-    return null;
+    return safeStorageGet<AdminUser | null>(STORAGE_KEY_ADMIN_USER, null);
   });
 
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
-    return localStorage.getItem(STORAGE_KEY_ADMIN) === 'true';
+    return safeStorageGetString(STORAGE_KEY_ADMIN, 'false') === 'true';
   });
 
   const [adminRequests, setAdminRequests] = useState<AdminRequest[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_ADMIN_REQUESTS);
-    return saved ? JSON.parse(saved) : [];
+    return safeStorageGet<AdminRequest[]>(STORAGE_KEY_ADMIN_REQUESTS, []);
   });
 
   const [adminStatus, setAdminStatus] = useState<{
@@ -448,14 +418,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // If this is the initial run, check if local storage had custom players not yet on server
           if (!initialBootstrapDone) {
             initialBootstrapDone = true;
-            const localSavedPlayersRaw = localStorage.getItem(STORAGE_KEY_PLAYERS);
-            const localSavedSubsRaw = localStorage.getItem(STORAGE_KEY_SUBS);
+            const rawPlayers = safeStorageGet<Player[]>(STORAGE_KEY_PLAYERS, []);
+            const rawSubs = safeStorageGet<Submission[]>(STORAGE_KEY_SUBS, []);
             
-            if (localSavedPlayersRaw || localSavedSubsRaw) {
+            if (rawPlayers.length > 0 || rawSubs.length > 0) {
               try {
-                const rawPlayers: Player[] = localSavedPlayersRaw ? JSON.parse(localSavedPlayersRaw) : [];
-                const rawSubs: Submission[] = localSavedSubsRaw ? JSON.parse(localSavedSubsRaw) : [];
-                
                 const localPlayers = rawPlayers.filter(p => !isDemoSeedPlayer(p));
                 const localSubs = rawSubs.filter(s => !s.id?.startsWith('sub-9021') && !s.id?.startsWith('sub-8842') && !s.id?.startsWith('sub-7612'));
                 
@@ -547,41 +514,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Save to localStorage
+  // Safe persistence to localStorage
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_PLAYERS, JSON.stringify(players));
+    safeStorageSet(STORAGE_KEY_PLAYERS, sanitizePlayersForStorage(players));
   }, [players]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_SUBS, JSON.stringify(submissions));
+    // Sanitizes submissions to strip oversized data:image URLs from localStorage
+    safeStorageSet(STORAGE_KEY_SUBS, sanitizeSubmissionsForStorage(submissions));
   }, [submissions]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_LOGS, JSON.stringify(auditLogs));
+    safeStorageSet(STORAGE_KEY_LOGS, sanitizeLogsForStorage(auditLogs));
   }, [auditLogs]);
 
   useEffect(() => {
     if (currentPlayer) {
-      localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(currentPlayer));
+      safeStorageSet(STORAGE_KEY_USER, currentPlayer);
     } else {
-      localStorage.removeItem(STORAGE_KEY_USER);
+      safeStorageRemove(STORAGE_KEY_USER);
     }
   }, [currentPlayer]);
 
   useEffect(() => {
     if (currentAdmin) {
-      localStorage.setItem(STORAGE_KEY_ADMIN_USER, JSON.stringify(currentAdmin));
+      safeStorageSet(STORAGE_KEY_ADMIN_USER, currentAdmin);
     } else {
-      localStorage.removeItem(STORAGE_KEY_ADMIN_USER);
+      safeStorageRemove(STORAGE_KEY_ADMIN_USER);
     }
   }, [currentAdmin]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_ADMIN, isAdmin ? 'true' : 'false');
+    safeStorageSet(STORAGE_KEY_ADMIN, isAdmin ? 'true' : 'false');
   }, [isAdmin]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_ADMIN_REQUESTS, JSON.stringify(adminRequests));
+    safeStorageSet(STORAGE_KEY_ADMIN_REQUESTS, adminRequests);
   }, [adminRequests]);
 
   const showToast = (text: string, type: 'success' | 'error' | 'info' = 'info') => {

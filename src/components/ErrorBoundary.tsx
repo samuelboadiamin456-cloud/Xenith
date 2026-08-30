@@ -28,11 +28,19 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   private handleReset = (): void => {
+    try {
+      localStorage.removeItem('xn_academy_submissions_v1');
+      localStorage.removeItem('xn_academy_logs_v1');
+    } catch {}
     this.setState({ hasError: false, error: null });
     window.location.reload();
   };
 
   private handleClearAndHome = (): void => {
+    try {
+      localStorage.removeItem('xn_academy_submissions_v1');
+      localStorage.removeItem('xn_academy_logs_v1');
+    } catch {}
     this.setState({ hasError: false, error: null });
     window.location.href = '/';
   };
