@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import { initSchema, loadAppStateFromNeon, saveAppStateToNeon, checkNeonHealth } from './db';
 
 // Interfaces matching frontend types
 export type RankTier = 'E' | 'D' | 'C' | 'B' | 'A' | 'S' | 'S-MAX';
@@ -173,14 +174,48 @@ let dbAdminRequests: AdminRequest[] = [];
 let dbNotifications: AppNotification[] = [];
 let dbEvents: AcademyEvent[] = [];
 
-// Load Database from disk on startup
-function loadDatabase() {
+// Load Database from disk and Neon
+async function loadDatabase() {
+  // 1. First attempt to load authoritative state from Neon PostgreSQL
+  try {
+    const neonData = await loadAppStateFromNeon();
+    if (neonData && typeof neonData === 'object') {
+      if (Array.isArray(neonData.players)) {
+        dbPlayers = neonData.players.filter((p: Player) => !p.id?.startsWith('p-seed-') && p.xnId !== 'XN-001' && p.xnId !== 'XN-002' && p.xnId !== 'XN-003' && p.xnId !== 'XN-004' && p.xnId !== 'XN-005' && p.xnId !== 'XN-006');
+      }
+      if (Array.isArray(neonData.submissions)) {
+        dbSubmissions = neonData.submissions.filter((s: Submission) => !s.id?.startsWith('sub-9021') && !s.id?.startsWith('sub-8842') && !s.id?.startsWith('sub-7612'));
+      }
+      if (Array.isArray(neonData.auditLogs)) {
+        dbAuditLogs = neonData.auditLogs.filter((l: AuditLog) => !l.id?.startsWith('log-seed-'));
+      }
+      if (Array.isArray(neonData.admins)) dbAdmins = neonData.admins;
+      if (Array.isArray(neonData.adminRequests)) dbAdminRequests = neonData.adminRequests;
+      if (Array.isArray(neonData.notifications)) {
+        dbNotifications = neonData.notifications.filter((n: AppNotification) => !n.id?.startsWith('notif-seed-'));
+      }
+      if (Array.isArray(neonData.events)) {
+        dbEvents = neonData.events.filter((e: AcademyEvent) => !e.id?.startsWith('event-seed-'));
+      }
+
+      // Cache to local file for fast offline reads
+      try {
+        fs.writeFileSync(DB_FILE, JSON.stringify(neonData, null, 2), 'utf-8');
+      } catch {}
+
+      console.log(`[Storage] Database loaded from Neon DB: ${dbPlayers.length} live players, ${dbSubmissions.length} submissions, ${dbAdmins.length} admins.`);
+      return;
+    }
+  } catch (err) {
+    console.error('[Storage] Error loading from Neon DB:', err);
+  }
+
+  // 2. Fallback to local disk file if Neon is empty or not yet seeded
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
       const data = JSON.parse(raw);
       if (Array.isArray(data.players)) {
-        // Filter out any lingering seed records if present
         dbPlayers = data.players.filter((p: Player) => !p.id?.startsWith('p-seed-') && p.xnId !== 'XN-001' && p.xnId !== 'XN-002' && p.xnId !== 'XN-003' && p.xnId !== 'XN-004' && p.xnId !== 'XN-005' && p.xnId !== 'XN-006');
       } else {
         dbPlayers = [];
@@ -213,7 +248,10 @@ function loadDatabase() {
         dbEvents = [];
       }
 
-      console.log(`[Storage] Database loaded from disk: ${dbPlayers.length} live players, ${dbAdmins.length} admins, ${dbNotifications.length} notifications.`);
+      console.log(`[Storage] Database loaded from disk fallback: ${dbPlayers.length} live players, ${dbAdmins.length} admins.`);
+
+      // Seed local disk data to Neon so Neon has it
+      saveDatabase();
     } else {
       dbPlayers = [];
       dbSubmissions = [];
@@ -234,27 +272,46 @@ function loadDatabase() {
   }
 }
 
-// Save Database to disk safely
+// Save Database to disk and Neon PostgreSQL
 function saveDatabase() {
+  const data = {
+    players: dbPlayers,
+    submissions: dbSubmissions,
+    auditLogs: dbAuditLogs,
+    admins: dbAdmins,
+    adminRequests: dbAdminRequests,
+    notifications: dbNotifications,
+    events: dbEvents,
+    lastSaved: new Date().toISOString()
+  };
+
+  // 1. Fast local disk write
   try {
-    const data = {
-      players: dbPlayers,
-      submissions: dbSubmissions,
-      auditLogs: dbAuditLogs,
-      admins: dbAdmins,
-      adminRequests: dbAdminRequests,
-      notifications: dbNotifications,
-      events: dbEvents,
-      lastSaved: new Date().toISOString()
-    };
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
     console.error('[Storage] Error saving database to disk:', err);
   }
+
+  // 2. Persistent Neon PostgreSQL write
+  saveAppStateToNeon(data).catch((err) => {
+    console.error('[Storage] Asynchronous save to Neon DB failed:', err);
+  });
 }
 
-// Initialize persistence on module load
-loadDatabase();
+// Initial synchronous load from local file on module import
+try {
+  if (fs.existsSync(DB_FILE)) {
+    const raw = fs.readFileSync(DB_FILE, 'utf-8');
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.players)) dbPlayers = data.players;
+    if (Array.isArray(data.submissions)) dbSubmissions = data.submissions;
+    if (Array.isArray(data.auditLogs)) dbAuditLogs = data.auditLogs;
+    if (Array.isArray(data.admins)) dbAdmins = data.admins;
+    if (Array.isArray(data.adminRequests)) dbAdminRequests = data.adminRequests;
+    if (Array.isArray(data.notifications)) dbNotifications = data.notifications;
+    if (Array.isArray(data.events)) dbEvents = data.events;
+  }
+} catch {}
 
 // Lazy initialized GenAI client
 let genAiClient: GoogleGenAI | null = null;
@@ -2260,6 +2317,31 @@ The user selected OCR card category "${mode}".
       auditLog: log
     });
   });
+
+  // Database Connection & Diagnostic Endpoint
+  app.get('/api/database/status', async (req: Request, res: Response) => {
+    const health = await checkNeonHealth();
+    res.json({
+      ...health,
+      memoryCounts: {
+        players: dbPlayers.length,
+        submissions: dbSubmissions.length,
+        admins: dbAdmins.length,
+        adminRequests: dbAdminRequests.length,
+        auditLogs: dbAuditLogs.length,
+        notifications: dbNotifications.length,
+        events: dbEvents.length
+      }
+    });
+  });
+
+  // --- INITIALIZE NEON DATABASE SCHEMA & HYDRATE STATE ---
+  try {
+    await initSchema();
+    await loadDatabase();
+  } catch (err) {
+    console.error('[Storage] Database initialization/hydration error:', err);
+  }
 
   // --- VITE MIDDLEWARE & STATIC SERVING ---
   if (process.env.NODE_ENV !== 'production') {
