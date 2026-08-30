@@ -17,7 +17,10 @@ import {
   ShieldAlert,
   Flame,
   Info,
-  Check
+  Check,
+  Lock,
+  AlertTriangle,
+  FileEdit
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { calculateSubmissionScore } from '../data/rankConfigs';
@@ -67,6 +70,7 @@ export const SubmitSitrepView: React.FC = () => {
   const [yellowHighlightDetected, setYellowHighlightDetected] = useState<string | null>(
     currentPlayer?.ign ? `${currentPlayer.ign} (Yellow Highlight Active Player)` : 'ARC EBŰZZY (Yellow Highlight Active Player)'
   );
+  const [discrepancyReport, setDiscrepancyReport] = useState<string>('');
 
   const scoreBreakdown = calculateSubmissionScore(stats);
 
@@ -417,7 +421,7 @@ export const SubmitSitrepView: React.FC = () => {
       return;
     }
 
-    createSubmission(stats, evidencePreview || undefined);
+    createSubmission(stats, evidencePreview || undefined, discrepancyReport.trim() || undefined);
     setActiveView('dashboard');
   };
 
@@ -904,47 +908,64 @@ export const SubmitSitrepView: React.FC = () => {
           </div>
         </div>
 
-        {/* Step 2: Extracted Telemetry Metrics (Dynamic per Mode) */}
+        {/* Step 2: Extracted Telemetry Metrics (Dynamic per Mode) - LOCKED FOR OPERATIVES */}
         <div className="space-y-4 pt-4 border-t border-slate-800/80">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <span className="font-mono text-xs font-bold text-slate-200 uppercase flex items-center gap-2">
               <FileText className="w-4 h-4 text-orange-400" />
               2. Extracted {activeMode} Metrics (Yellow Highlighted Player)
             </span>
-            <span className="font-mono text-[10px] text-slate-400">
-              Operative: <b className="text-amber-300">{stats.highlightedIgn || currentPlayer?.ign || 'OPERATIVE'}</b>
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 font-mono text-[10px] font-bold text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/30">
+                <Lock className="w-3 h-3" /> TELEMETRY LOCKED (OCR AUTO-FILL)
+              </span>
+              <span className="font-mono text-[10px] text-slate-400">
+                Operative: <b className="text-amber-300">{stats.highlightedIgn || currentPlayer?.ign || 'OPERATIVE'}</b>
+              </span>
+            </div>
+          </div>
+
+          {/* Locked Notice Banner */}
+          <div className="bg-slate-950/90 border border-slate-800 rounded-lg px-3.5 py-2.5 flex items-start gap-2.5 text-xs text-slate-400">
+            <Lock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <p className="leading-relaxed font-body">
+              Telemetry inputs are strictly <span className="text-white font-bold">read-only</span> to ensure match integrity. Values are read directly from your scoreboard by the AI OCR engine. If the OCR misread a stat due to glare or resolution, submit a <span className="text-amber-300 font-semibold">Discrepancy Report</span> below and HQ Admin will calibrate it upon review.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {/* Kills */}
             <div>
-              <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
-                Kills ({activeMode === 'BR' ? '+5 XP/ea' : '+10 XP/ea'})
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-mono text-[11px] text-slate-400 uppercase">
+                  Kills ({activeMode === 'BR' ? '+5 XP' : '+10 XP'})
+                </label>
+                <Lock className="w-3 h-3 text-slate-500" />
+              </div>
               <input
                 type="number"
-                min="0"
                 value={stats.kills}
-                onChange={(e) => setStats({ ...stats, kills: parseInt(e.target.value) || 0 })}
-                className="w-full p-2.5 bg-slate-900 border border-slate-800 focus:border-cyan-500 rounded font-mono text-sm text-white outline-none"
-                required
+                readOnly
+                tabIndex={-1}
+                className="w-full p-2.5 bg-slate-950/80 border border-slate-800/80 rounded font-mono text-sm font-bold text-white cursor-not-allowed select-none opacity-90 focus:outline-none"
               />
             </div>
 
             {/* Assists (BR and SF only) */}
             {(activeMode === 'BR' || activeMode === 'SF') && (
               <div>
-                <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
-                  Assists (+3 XP/ea)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-mono text-[11px] text-slate-400 uppercase">
+                    Assists (+3 XP)
+                  </label>
+                  <Lock className="w-3 h-3 text-slate-500" />
+                </div>
                 <input
                   type="number"
-                  min="0"
                   value={stats.assists ?? 0}
-                  onChange={(e) => setStats({ ...stats, assists: parseInt(e.target.value) || 0 })}
-                  className="w-full p-2.5 bg-slate-900 border border-slate-800 focus:border-cyan-500 rounded font-mono text-sm text-cyan-400 outline-none"
-                  required
+                  readOnly
+                  tabIndex={-1}
+                  className="w-full p-2.5 bg-slate-950/80 border border-slate-800/80 rounded font-mono text-sm font-bold text-cyan-400 cursor-not-allowed select-none opacity-90 focus:outline-none"
                 />
               </div>
             )}
@@ -952,84 +973,93 @@ export const SubmitSitrepView: React.FC = () => {
             {/* Deaths (SF only) */}
             {activeMode === 'SF' && (
               <div>
-                <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
-                  Deaths (-5 XP/ea)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-mono text-[11px] text-slate-400 uppercase">
+                    Deaths (-5 XP)
+                  </label>
+                  <Lock className="w-3 h-3 text-slate-500" />
+                </div>
                 <input
                   type="number"
-                  min="0"
                   value={stats.deaths ?? 0}
-                  onChange={(e) => setStats({ ...stats, deaths: parseInt(e.target.value) || 0 })}
-                  className="w-full p-2.5 bg-slate-900 border border-slate-800 focus:border-red-500 rounded font-mono text-sm text-red-400 outline-none"
-                  required
+                  readOnly
+                  tabIndex={-1}
+                  className="w-full p-2.5 bg-slate-950/80 border border-slate-800/80 rounded font-mono text-sm font-bold text-red-400 cursor-not-allowed select-none opacity-90 focus:outline-none"
                 />
               </div>
             )}
 
             {/* Damage */}
             <div>
-              <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
-                Damage (+1 XP / 1k)
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-mono text-[11px] text-slate-400 uppercase">
+                  Damage (+1 XP / 1k)
+                </label>
+                <Lock className="w-3 h-3 text-slate-500" />
+              </div>
               <input
                 type="number"
-                min="0"
                 value={stats.damage ?? 0}
-                onChange={(e) => setStats({ ...stats, damage: parseInt(e.target.value) || 0 })}
-                className="w-full p-2.5 bg-slate-900 border border-slate-800 focus:border-amber-500 rounded font-mono text-sm text-amber-400 outline-none"
-                required
+                readOnly
+                tabIndex={-1}
+                className="w-full p-2.5 bg-slate-950/80 border border-slate-800/80 rounded font-mono text-sm font-bold text-amber-400 cursor-not-allowed select-none opacity-90 focus:outline-none"
               />
             </div>
 
             {/* BR Placement */}
             {activeMode === 'BR' && (
               <div>
-                <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
-                  BR Placement
-                </label>
-                <select
-                  value={stats.placement ?? 1}
-                  onChange={(e) => {
-                    const place = parseInt(e.target.value);
-                    setStats({ 
-                      ...stats, 
-                      placement: place, 
-                      placementText: place === 1 ? '1/12 Victory' : `#${place}/12`,
-                      outcome: place === 1 ? 'Victory' : 'Defeat' 
-                    });
-                  }}
-                  className="w-full p-2.5 bg-slate-900 border border-slate-800 focus:border-cyan-500 rounded font-mono text-sm text-emerald-400 outline-none cursor-pointer"
-                >
-                  <option value="1">#1 Victory (+50 XP)</option>
-                  <option value="2">#2 Placement (+30 XP)</option>
-                  <option value="3">#3 Placement (+10 XP)</option>
-                  <option value="4">#4 Placement (+0 XP)</option>
-                  <option value="5">#5 Placement (-30 XP)</option>
-                  <option value="6">#6+ Placement (-30 XP)</option>
-                </select>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-mono text-[11px] text-slate-400 uppercase">
+                    BR Placement
+                  </label>
+                  <Lock className="w-3 h-3 text-slate-500" />
+                </div>
+                <div className="w-full p-2.5 bg-slate-950/80 border border-slate-800/80 rounded font-mono text-sm font-bold text-emerald-400 cursor-not-allowed select-none flex items-center justify-between">
+                  <span>{stats.placementText || (stats.placement === 1 ? '#1 Victory (+50 XP)' : `#${stats.placement ?? 1} Placement`)}</span>
+                </div>
               </div>
             )}
 
             {/* SF / Custom Outcome */}
             {(activeMode === 'SF' || activeMode === 'CUSTOM') && (
               <div>
-                <label className="block font-mono text-[11px] text-slate-400 uppercase mb-1">
-                  Match Outcome
-                </label>
-                <select
-                  value={stats.outcome ?? 'Victory'}
-                  onChange={(e) => setStats({ ...stats, outcome: e.target.value as 'Victory' | 'Defeat', wins: e.target.value === 'Victory' ? 1 : 0 })}
-                  className="w-full p-2.5 bg-slate-900 border border-slate-800 focus:border-cyan-500 rounded font-mono text-sm text-emerald-400 outline-none cursor-pointer"
-                >
-                  <option value="Victory">
-                    Victory ({activeMode === 'SF' ? '+50 XP' : '+30 XP'})
-                  </option>
-                  <option value="Defeat">
-                    Defeat (-20 XP)
-                  </option>
-                </select>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-mono text-[11px] text-slate-400 uppercase">
+                    Match Outcome
+                  </label>
+                  <Lock className="w-3 h-3 text-slate-500" />
+                </div>
+                <div className="w-full p-2.5 bg-slate-950/80 border border-slate-800/80 rounded font-mono text-sm font-bold text-emerald-400 cursor-not-allowed select-none flex items-center justify-between">
+                  <span>{stats.outcome ?? 'Victory'} ({stats.outcome === 'Victory' ? (activeMode === 'SF' ? '+50 XP' : '+30 XP') : '-20 XP'})</span>
+                </div>
               </div>
             )}
+          </div>
+
+          {/* Discrepancy Reporting / Admin Correction Request */}
+          <div className="bg-[#0e141d] border border-slate-800 hover:border-amber-500/40 rounded-xl p-4 space-y-2.5 transition-colors">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                <span className="font-mono text-xs font-bold text-amber-300 uppercase">
+                  Report Telemetry Discrepancy (For Admin Correction)
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                Optional
+              </span>
+            </div>
+            <p className="font-body text-xs text-slate-400 leading-relaxed">
+              If the OCR misread your kills, damage, or placement due to screenshot glare or clan tags, describe the true scoreboard values below. The reviewing Admin will verify your screenshot evidence and update the telemetry accordingly.
+            </p>
+            <textarea
+              value={discrepancyReport}
+              onChange={(e) => setDiscrepancyReport(e.target.value)}
+              placeholder="e.g. OCR captured 8 kills, but scoreboard yellow row shows 10 kills and 4,120 damage. Please adjust during review."
+              rows={2}
+              className="w-full p-2.5 bg-slate-950 border border-slate-800 focus:border-amber-500 rounded font-mono text-xs text-slate-200 placeholder:text-slate-600 outline-none resize-none transition-colors"
+            />
           </div>
         </div>
 

@@ -111,6 +111,9 @@ export interface Submission {
   rejectionReason?: string;
   reviewedBy?: string;
   reviewedAt?: string;
+  discrepancyReport?: string;
+  adminEdited?: boolean;
+  adminEditedNote?: string;
 }
 
 export interface AuditLog {
@@ -1033,7 +1036,7 @@ The user selected OCR card category "${mode}".
 
   // POST create new submission
   app.post('/api/submissions', (req: Request, res: Response) => {
-    const { xnId, stats, mode = 'BR', evidenceUrl } = req.body;
+    const { xnId, stats, mode = 'BR', evidenceUrl, discrepancyReport } = req.body;
 
     const player = dbPlayers.find(p => 
       (xnId && p.xnId && p.xnId.toLowerCase() === String(xnId).toLowerCase()) ||
@@ -1082,7 +1085,8 @@ The user selected OCR card category "${mode}".
       mode: subMode,
       evidenceUrl: evidenceUrl || undefined,
       fraudFlags,
-      scoreBreakdown: score
+      scoreBreakdown: score,
+      discrepancyReport: discrepancyReport ? String(discrepancyReport).trim() : undefined
     };
 
     dbSubmissions.unshift(newSub);
@@ -1092,7 +1096,7 @@ The user selected OCR card category "${mode}".
       action: fraudFlags.length > 0 ? 'SITREP_FLAGGED' : 'SITREP_SUBMITTED',
       timestamp: new Date().toISOString(),
       actorType: 'system',
-      details: `${newSub.id} [${subMode}] from ${playerName} (${newSub.xnId}) queued for review (Score: ${score.total} XP).${fraudFlags.length ? ` Flags: ${fraudFlags.join(', ')}` : ''}`
+      details: `${newSub.id} [${subMode}] from ${playerName} (${newSub.xnId}) queued for review (Score: ${score.total} XP).${discrepancyReport ? ` [Operative Discrepancy Note: "${discrepancyReport}"]` : ''}${fraudFlags.length ? ` Flags: ${fraudFlags.join(', ')}` : ''}`
     };
     dbAuditLogs.unshift(log);
     saveDatabase();
@@ -1100,9 +1104,10 @@ The user selected OCR card category "${mode}".
     res.status(201).json({ submission: newSub, auditLog: log });
   });
 
-  // POST approve submission (Updates cumulative win rate & rank thresholds)
-  app.post('/api/submissions/:id/approve', (req: Request, res: Response) => {
+  // PUT update submission telemetry (Admin Only)
+  app.put('/api/submissions/:id/telemetry', (req: Request, res: Response) => {
     const { id } = req.params;
+    const { stats, reason } = req.body;
     const subIndex = dbSubmissions.findIndex(s => s.id === id);
 
     if (subIndex === -1) {
@@ -1110,8 +1115,94 @@ The user selected OCR card category "${mode}".
     }
 
     const sub = dbSubmissions[subIndex];
+    const subMode: SitrepMode = stats?.mode || sub.mode || 'BR';
+    const updatedStats: SubmissionStats = {
+      ...sub.stats,
+      ...stats,
+      mode: subMode,
+      kills: Math.max(0, Math.round(Number(stats?.kills ?? sub.stats.kills) || 0)),
+      assists: stats?.assists !== undefined ? Math.max(0, Math.round(Number(stats.assists) || 0)) : sub.stats.assists,
+      deaths: stats?.deaths !== undefined ? Math.max(0, Math.round(Number(stats.deaths) || 0)) : sub.stats.deaths,
+      damage: stats?.damage !== undefined ? Math.max(0, Math.round(Number(stats.damage) || 0)) : sub.stats.damage,
+      placement: stats?.placement !== undefined ? Number(stats.placement) : sub.stats.placement,
+      placementText: stats?.placementText || sub.stats.placementText,
+      outcome: stats?.outcome || sub.stats.outcome,
+      wins: stats?.wins !== undefined ? Number(stats.wins) : (stats?.outcome === 'Victory' || stats?.placement === 1 ? 1 : 0),
+      matches: Math.max(1, Math.round(Number(stats?.matches ?? sub.stats.matches) || 1))
+    };
+
+    const newScore = calculateSubmissionScore(updatedStats);
+
+    const updatedSub: Submission = {
+      ...sub,
+      stats: updatedStats,
+      mode: subMode,
+      scoreBreakdown: newScore,
+      adminEdited: true,
+      adminEditedNote: reason || 'Admin telemetry adjustment based on scoreboard verification'
+    };
+
+    dbSubmissions[subIndex] = updatedSub;
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'SITREP_TELEMETRY_CORRECTED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Submission ${id} telemetry adjusted by Admin. New Total: +${newScore.total} XP. Reason: ${reason || 'Scoreboard audit adjustment'}`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    res.json({ submission: updatedSub, auditLog: log });
+  });
+
+  // POST approve submission (Updates cumulative win rate & rank thresholds)
+  app.post('/api/submissions/:id/approve', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { stats: editedStats, reason: editReason } = req.body;
+    const subIndex = dbSubmissions.findIndex(s => s.id === id);
+
+    if (subIndex === -1) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+
+    let sub = dbSubmissions[subIndex];
     if (sub.status === 'approved') {
       return res.status(400).json({ error: 'Submission is already approved' });
+    }
+
+    let isAdminEdited = sub.adminEdited || false;
+    let adminEditedNote = sub.adminEditedNote;
+
+    // If edited telemetry stats were passed during approval
+    if (editedStats && typeof editedStats === 'object') {
+      const subMode: SitrepMode = editedStats.mode || sub.mode || 'BR';
+      const updatedStats: SubmissionStats = {
+        ...sub.stats,
+        ...editedStats,
+        mode: subMode,
+        kills: Math.max(0, Math.round(Number(editedStats.kills ?? sub.stats.kills) || 0)),
+        assists: editedStats.assists !== undefined ? Math.max(0, Math.round(Number(editedStats.assists) || 0)) : sub.stats.assists,
+        deaths: editedStats.deaths !== undefined ? Math.max(0, Math.round(Number(editedStats.deaths) || 0)) : sub.stats.deaths,
+        damage: editedStats.damage !== undefined ? Math.max(0, Math.round(Number(editedStats.damage) || 0)) : sub.stats.damage,
+        placement: editedStats.placement !== undefined ? Number(editedStats.placement) : sub.stats.placement,
+        placementText: editedStats.placementText || sub.stats.placementText,
+        outcome: editedStats.outcome || sub.stats.outcome,
+        wins: editedStats.wins !== undefined ? Number(editedStats.wins) : (editedStats.outcome === 'Victory' || editedStats.placement === 1 ? 1 : 0),
+        matches: Math.max(1, Math.round(Number(editedStats.matches ?? sub.stats.matches) || 1))
+      };
+      const newScore = calculateSubmissionScore(updatedStats);
+      isAdminEdited = true;
+      adminEditedNote = editReason || 'Admin telemetry adjustment applied on approval';
+      sub = {
+        ...sub,
+        stats: updatedStats,
+        mode: subMode,
+        scoreBreakdown: newScore,
+        adminEdited: true,
+        adminEditedNote
+      };
     }
 
     const awardedXp = sub.scoreBreakdown.total;
@@ -1126,6 +1217,8 @@ The user selected OCR card category "${mode}".
     const updatedSub: Submission = {
       ...sub,
       status: 'approved',
+      adminEdited: isAdminEdited,
+      adminEditedNote,
       reviewedBy: req.body.reviewedBy || 'Admin_Lead',
       reviewedAt: new Date().toISOString()
     };

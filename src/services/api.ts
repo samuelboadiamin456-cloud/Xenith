@@ -180,6 +180,7 @@ export const api = {
     stats: SubmissionStats;
     mode?: 'BR' | 'SF' | 'CUSTOM';
     evidenceUrl?: string;
+    discrepancyReport?: string;
   }): Promise<{ submission: Submission; auditLog?: AuditLog }> {
     const res = await fetch('/api/submissions', {
       method: 'POST',
@@ -189,6 +190,25 @@ export const api = {
 
     if (!res.ok) {
       throw new Error('Failed to submit performance report');
+    }
+
+    return await res.json();
+  },
+
+  async updateSubmissionTelemetry(
+    id: string, 
+    stats: SubmissionStats, 
+    reason?: string
+  ): Promise<{ submission: Submission; auditLog?: AuditLog }> {
+    const res = await fetch(`/api/submissions/${encodeURIComponent(id)}/telemetry`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ stats, reason })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to update telemetry');
     }
 
     return await res.json();
@@ -242,10 +262,15 @@ export const api = {
     return await res.json();
   },
 
-  async approveSubmission(id: string): Promise<{ submission: Submission; player?: Player; auditLog?: AuditLog }> {
+  async approveSubmission(
+    id: string, 
+    editedStats?: SubmissionStats, 
+    reason?: string
+  ): Promise<{ submission: Submission; player?: Player; auditLog?: AuditLog }> {
     const res = await fetch(`/api/submissions/${encodeURIComponent(id)}/approve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() }
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ stats: editedStats, reason })
     });
 
     if (!res.ok) {

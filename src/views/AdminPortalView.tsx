@@ -19,9 +19,16 @@ import {
   UserCheck,
   UserX,
   FileText,
-  Shield
+  Shield,
+  Edit3,
+  Sliders,
+  FileEdit,
+  Save,
+  ShieldCheck
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { calculateSubmissionScore } from '../data/rankConfigs';
+import { SubmissionStats, Submission, SitrepMode } from '../types';
 
 export const AdminPortalView: React.FC = () => {
   const { 
@@ -35,6 +42,7 @@ export const AdminPortalView: React.FC = () => {
     logout, 
     submissions, 
     approveSubmission, 
+    editSubmissionTelemetry,
     flagSubmission, 
     rejectSubmission, 
     adminStats, 
@@ -47,6 +55,11 @@ export const AdminPortalView: React.FC = () => {
   const [rejectReason, setRejectReason] = useState<string>('Screenshot resolution invalid or stats mismatched');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [inspectImage, setInspectImage] = useState<string | null>(null);
+
+  // Telemetry calibration modal state
+  const [editingSub, setEditingSub] = useState<Submission | null>(null);
+  const [editStats, setEditStats] = useState<SubmissionStats | null>(null);
+  const [editReason, setEditReason] = useState<string>('');
 
   // If not logged in as admin, show security authentication prompt
   if (!isAdmin) {
@@ -107,6 +120,35 @@ export const AdminPortalView: React.FC = () => {
   });
 
   const pendingAdminRequests = adminRequests.filter(r => r.status === 'pending');
+
+  const handleStartEditTelemetry = (sub: Submission) => {
+    setEditingSub(sub);
+    setEditStats({ ...sub.stats, mode: sub.mode || sub.stats.mode || 'BR' });
+    setEditReason(sub.discrepancyReport ? `Correction based on operative report: "${sub.discrepancyReport}"` : 'Admin scoreboard telemetry verification');
+  };
+
+  const handleSaveTelemetryOnly = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSub || !editStats) return;
+    try {
+      await editSubmissionTelemetry(editingSub.id, editStats, editReason);
+      setEditingSub(null);
+      setEditStats(null);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to save telemetry', 'error');
+    }
+  };
+
+  const handleSaveAndApprove = async () => {
+    if (!editingSub || !editStats) return;
+    try {
+      await approveSubmission(editingSub.id, editStats, editReason);
+      setEditingSub(null);
+      setEditStats(null);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to approve with telemetry', 'error');
+    }
+  };
 
   const handleConfirmReject = (e: React.FormEvent) => {
     e.preventDefault();
@@ -292,21 +334,58 @@ export const AdminPortalView: React.FC = () => {
                     </div>
 
                     {/* Stats Telemetry */}
-                    <div className="lg:col-span-5 space-y-1.5 font-mono text-xs">
-                      <div className="flex flex-wrap gap-2 text-[11px]">
+                    <div className="lg:col-span-5 space-y-2 font-mono text-xs">
+                      <div className="flex flex-wrap gap-2 text-[11px] items-center">
+                        <span className="bg-orange-500/20 text-orange-400 font-bold px-2 py-0.5 rounded border border-orange-500/30">
+                          {sub.mode || sub.stats?.mode || 'BR'}
+                        </span>
                         <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
                           Kills: <b className="text-white">{sub.stats?.kills ?? 0}</b>
                         </span>
+                        {(sub.mode === 'BR' || sub.mode === 'SF' || sub.stats?.assists !== undefined) && (
+                          <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                            Assists: <b className="text-cyan-400">{sub.stats?.assists ?? 0}</b>
+                          </span>
+                        )}
+                        {(sub.mode === 'SF' || sub.stats?.deaths !== undefined) && (
+                          <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                            Deaths: <b className="text-red-400">{sub.stats?.deaths ?? 0}</b>
+                          </span>
+                        )}
                         <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                          Wins: <b className="text-emerald-400">{sub.stats?.wins ?? 0}</b>
+                          Dmg: <b className="text-amber-400">{sub.stats?.damage ?? 0}</b>
                         </span>
-                        <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                          K/D: <b className="text-cyan-400">{sub.stats?.kd ?? 0}</b>
-                        </span>
-                        <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                          HS: <b className="text-red-400">{sub.stats?.hs ?? 0}%</b>
-                        </span>
+                        {sub.mode === 'BR' ? (
+                          <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                            Place: <b className="text-emerald-400">#{sub.stats?.placement ?? 1}</b>
+                          </span>
+                        ) : (
+                          <span className="bg-slate-950 px-2 py-1 rounded border border-slate-800">
+                            Result: <b className="text-emerald-400">{sub.stats?.outcome ?? 'Victory'}</b>
+                          </span>
+                        )}
                       </div>
+
+                      {/* Admin Calibrated Badge */}
+                      {sub.adminEdited && (
+                        <div className="p-2 rounded bg-cyan-950/40 border border-cyan-500/40 text-[11px] font-mono text-cyan-300 flex items-start gap-1.5">
+                          <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-cyan-400 mt-0.5" />
+                          <div>
+                            <span className="font-bold">ADMIN CALIBRATED:</span> {sub.adminEditedNote || 'Telemetry updated by Headquarters Administrator'}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Operative Filed Discrepancy Alert */}
+                      {sub.discrepancyReport && (
+                        <div className="p-2.5 rounded bg-amber-950/40 border border-amber-500/50 text-[11px] font-mono text-amber-200 flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                          <div>
+                            <span className="font-bold text-amber-400 uppercase tracking-wide">OPERATIVE FILED DISCREPANCY:</span>
+                            <p className="text-slate-200 mt-0.5 font-body leading-relaxed">{sub.discrepancyReport}</p>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Fraud Flags Alert */}
                       {sub.fraudFlags && sub.fraudFlags.length > 0 && (
@@ -338,7 +417,15 @@ export const AdminPortalView: React.FC = () => {
 
                       {/* Review Actions */}
                       {sub.status !== 'approved' && sub.status !== 'rejected' && (
-                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+                          <button
+                            onClick={() => handleStartEditTelemetry(sub)}
+                            className="flex-1 sm:flex-none px-3 py-2 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 font-mono text-xs font-bold uppercase rounded transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                            title="Calibrate telemetry metrics based on scoreboard evidence or operative discrepancy report"
+                          >
+                            <Sliders className="w-3.5 h-3.5" /> Calibrate
+                          </button>
+
                           <button
                             onClick={() => approveSubmission(sub.id)}
                             className="flex-1 sm:flex-none px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs font-bold uppercase rounded transition-colors flex items-center justify-center gap-1 cursor-pointer"
@@ -360,6 +447,16 @@ export const AdminPortalView: React.FC = () => {
                             <X className="w-3.5 h-3.5" /> Reject
                           </button>
                         </div>
+                      )}
+
+                      {/* Allow telemetry calibration even if already approved or flagged */}
+                      {sub.status === 'approved' && (
+                        <button
+                          onClick={() => handleStartEditTelemetry(sub)}
+                          className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700 font-mono text-[11px] font-bold rounded transition-colors flex items-center gap-1 cursor-pointer"
+                        >
+                          <Edit3 className="w-3 h-3" /> Re-calibrate Metrics
+                        </button>
                       )}
                     </div>
                   </div>
@@ -538,6 +635,272 @@ export const AdminPortalView: React.FC = () => {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Telemetry Calibration Modal Dialog */}
+      {editingSub && editStats && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="w-full max-w-2xl bg-[#0d1218] border border-amber-500/50 rounded-2xl p-6 space-y-5 shadow-2xl my-8">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                  <Sliders className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[10px] text-amber-400 font-bold uppercase tracking-wider">
+                      HEADQUARTERS TELEMETRY CALIBRATION
+                    </span>
+                    <span className="font-mono text-[10px] text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/30">
+                      {editingSub.mode || editStats.mode || 'BR'}
+                    </span>
+                  </div>
+                  <h3 className="font-display text-lg font-bold text-white uppercase">
+                    Calibrate SITREP · {editingSub.playerName} ({editingSub.xnId})
+                  </h3>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingSub(null);
+                  setEditStats(null);
+                }}
+                className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Evidence Thumbnail & Operative Discrepancy Alert */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-950/80 p-3.5 rounded-xl border border-slate-800/80">
+              {/* Evidence preview */}
+              <div className="sm:col-span-1">
+                <span className="font-mono text-[10px] text-slate-400 uppercase block mb-1">
+                  SCOREBOARD EVIDENCE
+                </span>
+                {editingSub.evidenceUrl ? (
+                  <div 
+                    onClick={() => setInspectImage(editingSub.evidenceUrl!)}
+                    className="relative h-24 rounded-lg overflow-hidden border border-slate-700 bg-slate-900 cursor-pointer group"
+                  >
+                    <img src={editingSub.evidenceUrl} alt="Evidence" className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-[10px] font-mono text-white font-bold gap-1">
+                      <Eye className="w-3.5 h-3.5" /> Enlarge
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-24 rounded-lg border border-slate-800 flex items-center justify-center font-mono text-xs text-slate-600">
+                    No Evidence Image
+                  </div>
+                )}
+              </div>
+
+              {/* Operative Discrepancy Note */}
+              <div className="sm:col-span-2 space-y-1.5">
+                <span className="font-mono text-[10px] text-slate-400 uppercase block">
+                  OPERATIVE FILED DISCREPANCY
+                </span>
+                {editingSub.discrepancyReport ? (
+                  <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 font-mono">
+                    <p className="font-body leading-relaxed">{editingSub.discrepancyReport}</p>
+                  </div>
+                ) : (
+                  <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-500 font-mono italic">
+                    No operative discrepancy note filed. Calibrating per admin scoreboard review.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Editable Telemetry Fields */}
+            <div className="space-y-3">
+              <span className="font-mono text-xs font-bold text-slate-300 uppercase flex items-center gap-1.5">
+                <Edit3 className="w-3.5 h-3.5 text-amber-400" />
+                Calibrate Metric Values
+              </span>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono text-xs">
+                {/* Kills */}
+                <div>
+                  <label className="block text-[11px] text-slate-400 uppercase mb-1">
+                    Kills
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editStats.kills}
+                    onChange={(e) => setEditStats({ ...editStats, kills: parseInt(e.target.value) || 0 })}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-700 focus:border-amber-500 rounded text-sm font-bold text-white outline-none"
+                  />
+                </div>
+
+                {/* Assists */}
+                <div>
+                  <label className="block text-[11px] text-slate-400 uppercase mb-1">
+                    Assists
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editStats.assists ?? 0}
+                    onChange={(e) => setEditStats({ ...editStats, assists: parseInt(e.target.value) || 0 })}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-700 focus:border-cyan-500 rounded text-sm font-bold text-cyan-400 outline-none"
+                  />
+                </div>
+
+                {/* Deaths */}
+                <div>
+                  <label className="block text-[11px] text-slate-400 uppercase mb-1">
+                    Deaths
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editStats.deaths ?? 0}
+                    onChange={(e) => setEditStats({ ...editStats, deaths: parseInt(e.target.value) || 0 })}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-700 focus:border-red-500 rounded text-sm font-bold text-red-400 outline-none"
+                  />
+                </div>
+
+                {/* Damage */}
+                <div>
+                  <label className="block text-[11px] text-slate-400 uppercase mb-1">
+                    Damage
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editStats.damage ?? 0}
+                    onChange={(e) => setEditStats({ ...editStats, damage: parseInt(e.target.value) || 0 })}
+                    className="w-full p-2.5 bg-slate-950 border border-slate-700 focus:border-amber-500 rounded text-sm font-bold text-amber-400 outline-none"
+                  />
+                </div>
+
+                {/* BR Placement */}
+                {(editStats.mode === 'BR' || editingSub.mode === 'BR') && (
+                  <div className="col-span-2">
+                    <label className="block text-[11px] text-slate-400 uppercase mb-1">
+                      BR Placement
+                    </label>
+                    <select
+                      value={editStats.placement ?? 1}
+                      onChange={(e) => {
+                        const place = parseInt(e.target.value);
+                        setEditStats({
+                          ...editStats,
+                          placement: place,
+                          placementText: place === 1 ? '1/12 Victory' : `#${place}/12`,
+                          outcome: place === 1 ? 'Victory' : 'Defeat'
+                        });
+                      }}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded text-sm font-bold text-emerald-400 outline-none cursor-pointer"
+                    >
+                      <option value="1">#1 Victory (+50 XP)</option>
+                      <option value="2">#2 Placement (+30 XP)</option>
+                      <option value="3">#3 Placement (+10 XP)</option>
+                      <option value="4">#4 Placement (+0 XP)</option>
+                      <option value="5">#5 Placement (-30 XP)</option>
+                      <option value="6">#6+ Placement (-30 XP)</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* SF / Custom Outcome */}
+                {(editStats.mode === 'SF' || editStats.mode === 'CUSTOM' || editingSub.mode === 'SF' || editingSub.mode === 'CUSTOM') && (
+                  <div className="col-span-2">
+                    <label className="block text-[11px] text-slate-400 uppercase mb-1">
+                      Match Outcome
+                    </label>
+                    <select
+                      value={editStats.outcome ?? 'Victory'}
+                      onChange={(e) => {
+                        const out = e.target.value as 'Victory' | 'Defeat';
+                        setEditStats({
+                          ...editStats,
+                          outcome: out,
+                          wins: out === 'Victory' ? 1 : 0
+                        });
+                      }}
+                      className="w-full p-2.5 bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded text-sm font-bold text-emerald-400 outline-none cursor-pointer"
+                    >
+                      <option value="Victory">Victory</option>
+                      <option value="Defeat">Defeat</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Recalculated XP Preview Box */}
+            {(() => {
+              const recalculated = calculateSubmissionScore(editStats);
+              return (
+                <div className="bg-slate-950 p-4 rounded-xl border border-cyan-500/30 flex items-center justify-between font-mono text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase block">RECALCULATED PERFORMANCE AWARD</span>
+                    <span className="text-xl font-black text-cyan-400">+{recalculated.total} XP</span>
+                    <span className="text-slate-400 block text-[10px] mt-0.5">
+                      Kills: +{recalculated.killsXp} · Assists: +{recalculated.assistsXp ?? 0} · Deaths: {recalculated.deathsXp ?? 0} · Dmg: +{recalculated.damageXp ?? 0} · Placement/Outcome: {(recalculated.placementBonus ?? recalculated.outcomeBonus ?? 0) >= 0 ? `+${recalculated.placementBonus ?? recalculated.outcomeBonus ?? 0}` : (recalculated.placementBonus ?? recalculated.outcomeBonus ?? 0)}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="px-2.5 py-1 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 text-[11px] font-bold">
+                      VERIFIED XP
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Calibration Reason Note */}
+            <div className="space-y-1">
+              <label className="block font-mono text-[11px] text-slate-400 uppercase">
+                Admin Audit & Calibration Note
+              </label>
+              <input
+                type="text"
+                value={editReason}
+                onChange={(e) => setEditReason(e.target.value)}
+                placeholder="e.g. Corrected Kills to 9 and Placement to #1 per yellow row verification"
+                className="w-full p-2.5 bg-slate-950 border border-slate-800 focus:border-amber-500 rounded font-mono text-xs text-white outline-none"
+                required
+              />
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-800 justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingSub(null);
+                  setEditStats(null);
+                }}
+                className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 font-mono text-xs rounded transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveTelemetryOnly}
+                className="px-4 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/50 font-mono text-xs font-bold uppercase rounded transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                <Save className="w-3.5 h-3.5" /> Save Telemetry Only
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSaveAndApprove}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs font-bold uppercase rounded transition-colors flex items-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-950"
+              >
+                <Check className="w-4 h-4" /> Save & Approve Now
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

@@ -123,6 +123,9 @@ export interface Submission {
   fraudFlags: string[];
   scoreBreakdown: ScoreBreakdown;
   rejectionReason?: string;
+  discrepancyReport?: string;
+  adminEdited?: boolean;
+  adminEditedNote?: string;
   reviewedBy?: string;
   reviewedAt?: string;
 }

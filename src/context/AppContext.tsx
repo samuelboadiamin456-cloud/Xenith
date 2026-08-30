@@ -161,8 +161,9 @@ interface AppContextType {
   rewardPlayer: (xnId: string, amount?: number, reason?: string) => Promise<void>;
   
   // Submissions
-  createSubmission: (stats: SubmissionStats, evidenceUrl?: string) => Promise<Submission>;
-  approveSubmission: (submissionId: string) => Promise<void>;
+  createSubmission: (stats: SubmissionStats, evidenceUrl?: string, discrepancyReport?: string) => Promise<Submission>;
+  approveSubmission: (submissionId: string, editedStats?: SubmissionStats, reason?: string) => Promise<void>;
+  editSubmissionTelemetry: (submissionId: string, stats: SubmissionStats, reason?: string) => Promise<void>;
   flagSubmission: (submissionId: string) => Promise<void>;
   rejectSubmission: (submissionId: string, reason: string) => Promise<void>;
   
@@ -940,7 +941,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Operative profile visual avatar updated successfully', 'success');
   };
 
-  const createSubmission = async (stats: SubmissionStats, evidenceUrl?: string): Promise<Submission> => {
+  const createSubmission = async (stats: SubmissionStats, evidenceUrl?: string, discrepancyReport?: string): Promise<Submission> => {
     const player = currentPlayer || players[0];
     const score = calculateSubmissionScore(stats);
     
@@ -958,7 +959,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           playerIgn: player.ign,
           stats,
           mode: stats.mode || 'BR',
-          evidenceUrl
+          evidenceUrl,
+          discrepancyReport
         });
 
         const newSub = result.submission;
@@ -984,7 +986,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       mode: stats.mode || 'BR',
       evidenceUrl: evidenceUrl || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800&auto=format&fit=crop',
       fraudFlags,
-      scoreBreakdown: score
+      scoreBreakdown: score,
+      discrepancyReport
     };
 
     setSubmissions(prev => [newSub, ...prev]);
@@ -994,7 +997,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       action: fraudFlags.length > 0 ? 'SITREP_FLAGGED' : 'SITREP_SUBMITTED',
       timestamp: new Date().toISOString(),
       actorType: 'system',
-      details: `${newSub.id} [${stats.mode || 'BR'}] from ${newSub.playerName} (${newSub.xnId}) queued for review. ${fraudFlags.length ? `Flags: ${fraudFlags.join(', ')}` : ''}`
+      details: `${newSub.id} [${stats.mode || 'BR'}] from ${newSub.playerName} (${newSub.xnId}) queued for review (Score: ${score.total} XP).${discrepancyReport ? ` [Discrepancy Report: "${discrepancyReport}"]` : ''}${fraudFlags.length ? ` Flags: ${fraudFlags.join(', ')}` : ''}`
     };
     setAuditLogs(prev => [log, ...prev]);
 
@@ -1002,12 +1005,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newSub;
   };
 
-  const approveSubmission = async (submissionId: string) => {
+  const editSubmissionTelemetry = async (submissionId: string, stats: SubmissionStats, reason?: string) => {
+    const newScore = calculateSubmissionScore(stats);
+    try {
+      const result = await api.updateSubmissionTelemetry(submissionId, stats, reason);
+      if (result.submission) {
+        setSubmissions(prev => prev.map(s => s.id === submissionId ? result.submission : s));
+      }
+      if (result.auditLog) {
+        setAuditLogs(prev => [result.auditLog!, ...prev]);
+      }
+      showToast(`Submission ${submissionId} Telemetry Updated (Recalculated: ${newScore.total >= 0 ? `+${newScore.total}` : newScore.total} XP)`, 'success');
+      return;
+    } catch (err) {
+      console.warn('[Edit Telemetry Fallback]', err);
+    }
+
+    setSubmissions(prev => prev.map(s => {
+      if (s.id !== submissionId) return s;
+      return {
+        ...s,
+        stats,
+        scoreBreakdown: newScore,
+        adminEdited: true,
+        adminEditedNote: reason || 'Admin telemetry adjustment'
+      };
+    }));
+
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'SITREP_TELEMETRY_CORRECTED',
+      timestamp: new Date().toISOString(),
+      actorType: 'admin',
+      details: `Submission ${submissionId} telemetry corrected by Admin (+${newScore.total} XP). Reason: ${reason || 'Scoreboard audit adjustment'}`
+    };
+    setAuditLogs(prev => [log, ...prev]);
+    showToast(`Submission ${submissionId} Telemetry Updated (+${newScore.total} XP)`, 'success');
+  };
+
+  const approveSubmission = async (submissionId: string, editedStats?: SubmissionStats, reason?: string) => {
     const sub = submissions.find(s => s.id === submissionId);
     if (!sub || sub.status === 'approved') return;
 
     try {
-      const result = await api.approveSubmission(submissionId);
+      const result = await api.approveSubmission(submissionId, editedStats, reason);
       if (result.submission) {
         setSubmissions(prev => prev.map(s => s.id === submissionId ? result.submission : s));
       }
@@ -1032,13 +1073,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAuditLogs(prev => [result.auditLog!, ...prev]);
       }
       await refreshAllData();
-      showToast(`Submission ${submissionId} Approved (+${sub.scoreBreakdown.total} XP)`, 'success');
+      const finalXp = result.submission?.scoreBreakdown?.total ?? (editedStats ? calculateSubmissionScore(editedStats).total : sub.scoreBreakdown.total);
+      showToast(`Submission ${submissionId} Approved (+${finalXp} XP)`, 'success');
       return;
     } catch (err) {
       console.warn('[Approval Fallback]', err);
     }
 
-    const awardedXp = sub.scoreBreakdown.total;
+    const finalStats = editedStats || sub.stats;
+    const finalScore = editedStats ? calculateSubmissionScore(editedStats) : sub.scoreBreakdown;
+    const awardedXp = finalScore.total;
     const targetPlayer = players.find(p => 
       (sub.xnId && p.xnId && p.xnId.toLowerCase() === sub.xnId.toLowerCase()) ||
       (sub.xnId && p.id && p.id.toLowerCase() === sub.xnId.toLowerCase()) ||
@@ -1047,7 +1091,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setSubmissions(prev => prev.map(s => 
       s.id === submissionId 
-        ? { ...s, status: 'approved', reviewedBy: currentAdmin?.displayName || 'Admin_Lead', reviewedAt: new Date().toISOString() } 
+        ? { 
+            ...s, 
+            status: 'approved', 
+            stats: finalStats,
+            scoreBreakdown: finalScore,
+            adminEdited: editedStats ? true : s.adminEdited,
+            adminEditedNote: reason || s.adminEditedNote,
+            reviewedBy: currentAdmin?.displayName || 'Admin_Lead', 
+            reviewedAt: new Date().toISOString() 
+          } 
         : s
     ));
 
@@ -1057,15 +1110,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const newRank = calculateRank(newTotalXp);
 
       const oldStats = targetPlayer.lifetimeStats || { kills: 0, wins: 0, matches: 0, kd: 0, winRate: 0, hs: 0 };
-      const totalMatches = (oldStats.matches || 0) + (sub.stats.matches || 1);
-      const totalWins = (oldStats.wins || 0) + (sub.stats.wins || 0);
-      const totalKills = (oldStats.kills || 0) + (sub.stats.kills || 0);
-      const subDeaths = sub.stats.deaths !== undefined ? sub.stats.deaths : (sub.stats.outcome === 'Defeat' ? 1 : 0);
+      const totalMatches = (oldStats.matches || 0) + (finalStats.matches || 1);
+      const totalWins = (oldStats.wins || 0) + (finalStats.wins || 0);
+      const totalKills = (oldStats.kills || 0) + (finalStats.kills || 0);
+      const subDeaths = finalStats.deaths !== undefined ? finalStats.deaths : (finalStats.outcome === 'Defeat' ? 1 : 0);
       const oldDeaths = (oldStats.matches && oldStats.kd && oldStats.kd > 0) ? Math.round(oldStats.kills / oldStats.kd) : 0;
       const totalDeaths = Math.max(1, oldDeaths + subDeaths);
       const updatedKd = totalDeaths > 0 ? parseFloat((totalKills / totalDeaths).toFixed(2)) : totalKills;
-      const updatedWinRate = totalMatches > 0 ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) : sub.stats.winRate;
-      const updatedHs = parseFloat((((oldStats.hs || 0) + (sub.stats.hs || 0)) / 2).toFixed(1));
+      const updatedWinRate = totalMatches > 0 ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) : (finalStats.winRate || 0);
+      const updatedHs = parseFloat((((oldStats.hs || 0) + (finalStats.hs || 0)) / 2).toFixed(1));
 
       const updatedPlayer: Player = {
         ...targetPlayer,
@@ -1101,7 +1154,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       action: 'SUBMISSION_APPROVED',
       timestamp: new Date().toISOString(),
       actorType: 'admin',
-      details: `Submission ${submissionId} approved for ${sub.playerName} (+${awardedXp} XP)`
+      details: `Submission ${submissionId} approved for ${sub.playerName} (+${awardedXp} XP)${editedStats ? ' [with Admin Telemetry Adjustment]' : ''}`
     };
     setAuditLogs(prev => [log, ...prev]);
     showToast(`Submission ${submissionId} Approved (+${awardedXp} XP)`, 'success');
@@ -1469,6 +1522,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateAvatar,
         createSubmission,
         approveSubmission,
+        editSubmissionTelemetry,
         flagSubmission,
         rejectSubmission,
         triggerRankCelebration,
