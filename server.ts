@@ -1,11 +1,8 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
-import { pool, initSchema } from './db.js';
 
 // Interfaces matching frontend types
 export type RankTier = 'E' | 'D' | 'C' | 'B' | 'A' | 'S' | 'S-MAX';
@@ -174,7 +171,7 @@ let dbNotifications: AppNotification[] = [];
 let dbEvents: AcademyEvent[] = [];
 
 // Load Database from disk on startup
-function loadDatabaseFromFile() {
+function loadDatabase() {
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
@@ -213,30 +210,29 @@ function loadDatabaseFromFile() {
         dbEvents = [];
       }
 
-      console.log(`[Storage] Database loaded from local file: ${dbPlayers.length} live players, ${dbAdmins.length} admins, ${dbNotifications.length} notifications.`);
+      console.log(`[Storage] Database loaded from disk: ${dbPlayers.length} live players, ${dbAdmins.length} admins, ${dbNotifications.length} notifications.`);
     } else {
       dbPlayers = [];
       dbSubmissions = [];
       dbAuditLogs = [];
       dbNotifications = [];
       dbEvents = [];
-      saveDatabaseToFile();
+      saveDatabase();
       console.log(`[Storage] Clean empty database created and saved to ${DB_FILE}`);
     }
   } catch (err) {
-    console.error('[Storage] Error loading database from local file:', err);
+    console.error('[Storage] Error loading database from disk:', err);
     dbPlayers = [];
     dbSubmissions = [];
     dbAuditLogs = [];
     dbNotifications = [];
     dbEvents = [];
-    saveDatabaseToFile();
+    saveDatabase();
   }
 }
 
-// Save Database to local disk (fallback path, and used when no
-// DATABASE_URL is configured — e.g. local development)
-function saveDatabaseToFile() {
+// Save Database to disk safely
+function saveDatabase() {
   try {
     const data = {
       players: dbPlayers,
@@ -250,113 +246,12 @@ function saveDatabaseToFile() {
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
-    console.error('[Storage] Error saving database to local file:', err);
+    console.error('[Storage] Error saving database to disk:', err);
   }
 }
 
-// Real persistence: the entire app state is synced as one JSON blob
-// into a single Postgres row. This is a deliberately minimal change
-// (versus fully normalizing 7 tables' worth of business logic across
-// 40 routes) that fixes the actual problem — Render's free web
-// services have no persistent disk, so the local-file fallback above
-// gets wiped on every redeploy. Postgres (Neon) survives redeploys.
-async function loadDatabase() {
-  if (pool) {
-    try {
-      const { rows } = await pool.query("SELECT data FROM app_state WHERE id = 'main'");
-      if (rows.length) {
-        const data = rows[0].data;
-        dbPlayers = Array.isArray(data.players) ? data.players : [];
-        dbSubmissions = Array.isArray(data.submissions) ? data.submissions : [];
-        dbAuditLogs = Array.isArray(data.auditLogs) ? data.auditLogs : [];
-        dbAdmins = Array.isArray(data.admins) ? data.admins : [];
-        dbAdminRequests = Array.isArray(data.adminRequests) ? data.adminRequests : [];
-        dbNotifications = Array.isArray(data.notifications) ? data.notifications : [];
-        dbEvents = Array.isArray(data.events) ? data.events : [];
-        console.log(`[Storage] Loaded from Postgres: ${dbPlayers.length} players, ${dbAdmins.length} admins, ${dbSubmissions.length} submissions.`);
-      } else {
-        console.log('[Storage] No existing Postgres state row found — starting fresh and creating one.');
-        await saveDatabase();
-      }
-      return;
-    } catch (err) {
-      console.error('[Storage] Postgres load failed, falling back to local file:', err);
-    }
-  } else {
-    console.log('[Storage] DATABASE_URL not set — using local file storage (will NOT survive redeploys on Render).');
-  }
-  loadDatabaseFromFile();
-}
-
-async function saveDatabase() {
-  const data = {
-    players: dbPlayers,
-    submissions: dbSubmissions,
-    auditLogs: dbAuditLogs,
-    admins: dbAdmins,
-    adminRequests: dbAdminRequests,
-    notifications: dbNotifications,
-    events: dbEvents,
-    lastSaved: new Date().toISOString()
-  };
-  if (pool) {
-    try {
-      await pool.query(
-        `INSERT INTO app_state (id, data, updated_at) VALUES ('main', $1, now())
-         ON CONFLICT (id) DO UPDATE SET data = $1, updated_at = now()`,
-        [JSON.stringify(data)]
-      );
-      return;
-    } catch (err) {
-      console.error('[Storage] Postgres save failed, falling back to local file:', err);
-    }
-  }
-  saveDatabaseToFile();
-}
-
-// ---- admin auth (JWT) ----
-// Previously scaffolded (JWT_SECRET in .env.example) but never
-// actually implemented — every admin-mutating route was open to
-// anyone with no credentials at all, including a full data-wipe
-// endpoint. This closes that gap.
-const JWT_SECRET = process.env.JWT_SECRET || '';
-if (!JWT_SECRET) {
-  console.warn('[Security] JWT_SECRET is not set — admin routes will reject all requests until it is configured.');
-}
-const ADMIN_TOKEN_TTL = '12h';
-
-function signAdminToken(adminId: string): string {
-  return jwt.sign({ adminId }, JWT_SECRET || 'insecure-dev-fallback-do-not-use-in-production', { expiresIn: ADMIN_TOKEN_TTL });
-}
-
-function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing admin session token. Please log in again.' });
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET || 'insecure-dev-fallback-do-not-use-in-production') as { adminId: string };
-    const admin = dbAdmins.find(a => a.id === decoded.adminId);
-    if (!admin) return res.status(401).json({ error: 'Admin session no longer valid. Please log in again.' });
-    (req as any).adminId = admin.id;
-    (req as any).admin = admin;
-    next();
-  } catch {
-    return res.status(401).json({ error: 'Admin session is invalid or has expired. Please log in again.' });
-  }
-}
-
-function requireHeadOfCommand(req: Request, res: Response, next: NextFunction) {
-  requireAdmin(req, res, () => {
-    const admin = (req as any).admin as AdminUser | undefined;
-    if (!admin?.isHeadOfCommand) {
-      return res.status(403).json({ error: 'This action requires Head of Command authority.' });
-    }
-    next();
-  });
-}
-
-// Persistence and schema are initialized inside startServer() now,
-// awaited before the server starts accepting requests (see below).
+// Initialize persistence on module load
+loadDatabase();
 
 // Lazy initialized GenAI client
 let genAiClient: GoogleGenAI | null = null;
@@ -373,6 +268,16 @@ function getGenAiClient(): GoogleGenAI | null {
   }
   return genAiClient;
 }
+
+const RANK_ORDER: Record<RankTier, number> = {
+  'E': 0,
+  'D': 1,
+  'C': 2,
+  'B': 3,
+  'A': 4,
+  'S': 5,
+  'S-MAX': 6
+};
 
 // Rank Tier XP System as defined by user specification:
 // 1000xp = D rank
@@ -505,9 +410,6 @@ function calculateSubmissionScore(stats: SubmissionStats): ScoreBreakdown {
 }
 
 async function startServer() {
-  await initSchema();
-  await loadDatabase();
-
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
@@ -611,7 +513,7 @@ async function startServer() {
   });
 
   // Emergency / Administrative Data Purge
-  app.post('/api/admin/clear-all-data', requireHeadOfCommand, (req: Request, res: Response) => {
+  app.post('/api/admin/clear-all-data', (req: Request, res: Response) => {
     const { preserveAdmins = true } = req.body || {};
     dbPlayers = [];
     dbSubmissions = [];
@@ -699,59 +601,51 @@ async function startServer() {
     const nextNumber = maxNumber + 1;
     const formattedId = `XN-${nextNumber.toString().padStart(3, '0')}`;
 
-    const finish = (passwordHash: string | undefined) => {
-      const newPlayer: Player = {
-        id: `p-${Date.now()}`,
-        xnId: formattedId,
-        username: username.trim(),
-        email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
-        password: passwordHash,
-        displayName: displayName.trim(),
-        ign: ign.trim().toUpperCase(),
-        role,
-        country: country ? country.trim() : 'Global',
-        bio: bio ? bio.trim() : 'Verified recruit of the XN Academy competitive network.',
-        avatarUrl: avatarUrl || undefined,
-        currentRank: 'E',
-        peakRank: 'E',
-        totalXp: 50, // Welcome signup bonus
-        academyStatus: 'Cadet',
-        verificationStatus: 'Verified',
-        joinedAt: new Date().toISOString(),
-        lifetimeStats: {
-          kills: 0,
-          wins: 0,
-          matches: 0,
-          kd: 0.0,
-          winRate: 0.0, // Cumulative win rate
-          hs: 0.0
-        }
-      };
-
-      dbPlayers.unshift(newPlayer);
-      saveDatabase();
-
-      // Create system audit log
-      const log: AuditLog = {
-        id: `log-${Date.now()}`,
-        action: 'OPERATIVE_REGISTERED',
-        timestamp: new Date().toISOString(),
-        actorType: 'system',
-        details: `New account assigned official permanent identifier: ${formattedId} (${displayName})`
-      };
-      dbAuditLogs.unshift(log);
-      saveDatabase();
-
-      // Return player without leaking password
-      const { password: _, ...safePlayer } = newPlayer;
-      res.status(201).json({ player: safePlayer, auditLog: log });
+    const newPlayer: Player = {
+      id: `p-${Date.now()}`,
+      xnId: formattedId,
+      username: username.trim(),
+      email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+      password: password ? String(password) : undefined,
+      displayName: displayName.trim(),
+      ign: ign.trim().toUpperCase(),
+      role,
+      country: country ? country.trim() : 'Global',
+      bio: bio ? bio.trim() : 'Verified recruit of the XN Academy competitive network.',
+      avatarUrl: avatarUrl || undefined,
+      currentRank: 'E',
+      peakRank: 'E',
+      totalXp: 50, // Welcome signup bonus
+      academyStatus: 'Cadet',
+      verificationStatus: 'Verified',
+      joinedAt: new Date().toISOString(),
+      lifetimeStats: {
+        kills: 0,
+        wins: 0,
+        matches: 0,
+        kd: 0.0,
+        winRate: 0.0, // Cumulative win rate
+        hs: 0.0
+      }
     };
 
-    if (password) {
-      bcrypt.hash(String(password), 10).then(finish).catch(() => res.status(500).json({ error: 'Registration failed' }));
-    } else {
-      finish(undefined);
-    }
+    dbPlayers.unshift(newPlayer);
+    saveDatabase();
+
+    // Create system audit log
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'OPERATIVE_REGISTERED',
+      timestamp: new Date().toISOString(),
+      actorType: 'system',
+      details: `New account assigned official permanent identifier: ${formattedId} (${displayName})`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
+
+    // Return player without leaking password
+    const { password: _, ...safePlayer } = newPlayer;
+    res.status(201).json({ player: safePlayer, auditLog: log });
   });
 
   // POST Login player
@@ -775,25 +669,15 @@ async function startServer() {
       return res.status(404).json({ error: 'Operative not found with provided identifier' });
     }
 
-    const checkPassword = async () => {
-      if (!player.password || password === undefined) return true;
-      const looksHashed = player.password.startsWith('$2a$') || player.password.startsWith('$2b$');
-      const ok = looksHashed
-        ? await bcrypt.compare(String(password), player.password)
-        : player.password === String(password);
-      if (!ok) return false;
-      if (!looksHashed) {
-        player.password = await bcrypt.hash(String(password), 10);
-        saveDatabase();
+    // If player registered with a password, enforce password match
+    if (player.password && password !== undefined) {
+      if (player.password !== String(password)) {
+        return res.status(401).json({ error: 'Invalid operative clearance password' });
       }
-      return true;
-    };
+    }
 
-    checkPassword().then((ok) => {
-      if (!ok) return res.status(401).json({ error: 'Invalid operative clearance password' });
-      const { password: _, ...safePlayer } = player;
-      res.json({ player: safePlayer, message: 'Authentication successful' });
-    }).catch(() => res.status(500).json({ error: 'Authentication failed' }));
+    const { password: _, ...safePlayer } = player;
+    res.json({ player: safePlayer, message: 'Authentication successful' });
   });
 
   // PUT update player profile (Partial Merge to prevent overwriting existing data)
@@ -836,13 +720,34 @@ async function startServer() {
     res.json({ player: safePlayer });
   });
 
-  // --- ADVANCED 3-MODE SITREP OCR SCANNING (BR, SF, CUSTOM) ---
+  // Helper to normalize and compare Blood Strike In-Game Names (IGNs)
+  function cleanIgn(ign: string): string {
+    return ign
+      .toLowerCase()
+      .replace(/[\[\(\{<][^\]\)\}>]*[\]\)\}>]/g, '') // strip bracketed tags like [ARC], (XN)
+      .replace(/[^a-z0-9]/g, '') // strip special symbols, unicode accents, spacing
+      .trim();
+  }
+
+  function areIgnsMatching(ocrIgn: string, playerIgn: string): boolean {
+    if (!ocrIgn || !playerIgn) return false;
+    const cOcr = cleanIgn(ocrIgn);
+    const cPlayer = cleanIgn(playerIgn);
+    if (!cOcr || !cPlayer) return false;
+    if (cOcr === cPlayer) return true;
+    if (cOcr.includes(cPlayer) || cPlayer.includes(cOcr)) return true;
+    return false;
+  }
+
+  // --- ADVANCED 3-MODE SITREP OCR SCANNING (BR, SF, CUSTOM) WITH FRAUD DETECTION ---
   app.post('/api/ocr/scan-sitrep', async (req: Request, res: Response) => {
     try {
-      const { image, mode = 'BR' } = req.body;
+      const { image, mode = 'BR', playerIgn, xnId } = req.body;
       if (!image || typeof image !== 'string') {
         return res.status(400).json({ success: false, valid: false, message: 'Image payload is required' });
       }
+
+      const activeTargetIgn = (playerIgn || '').trim();
 
       // Prepare mimeType and base64Data
       let mimeType = 'image/jpeg';
@@ -858,17 +763,19 @@ async function startServer() {
       const ai = getGenAiClient();
       if (!ai) {
         // Deterministic fallback if GEMINI_API_KEY is not set
+        const defaultIgn = activeTargetIgn || 'ARC EBŰZZY';
         const extracted = {
-          highlightedIgn: 'OPERATIVE',
-          kills: 5,
-          assists: mode === 'BR' || mode === 'SF' ? 2 : 0,
-          deaths: mode === 'SF' ? 1 : 0,
-          damage: 2450,
+          highlightedIgn: defaultIgn,
+          kills: mode === 'BR' ? 14 : mode === 'SF' ? 9 : 15,
+          assists: mode === 'BR' ? 2 : mode === 'SF' ? 4 : undefined,
+          deaths: mode === 'SF' ? 2 : undefined,
+          damage: mode === 'BR' ? 3420 : mode === 'SF' ? 2850 : 3100,
           placement: mode === 'BR' ? 1 : undefined,
           placementText: mode === 'BR' ? '1/12 Victory' : undefined,
           outcome: 'Victory' as const,
-          cash: mode === 'BR' ? 12000 : undefined
+          cash: mode === 'BR' ? 18500 : undefined
         };
+
         return res.status(200).json({
           success: true,
           valid: true,
@@ -887,71 +794,41 @@ async function startServer() {
         });
       }
 
-      let systemInstruction = '';
-      if (mode === 'BR') {
-        systemInstruction = `You are a high-precision OCR and game scoreboard analyzer for Blood Strike Battle Royale (BR) post-match screens.
-CRITICAL VALIDATION RULES FOR BR:
-1. The screenshot MUST be a Battle Royale post-match scoreboard. Look for:
-   - "Battle Royale" mode title/header or top placement indicator (e.g., "1/12 Victory", "2/12", "#1", "#2", etc.)
-   - Summary statistics bar (Match Duration, Total Kills, Cash Obtained)
-   - Player roster table with columns: [Players, KILLS, Assist, Damage, Cash].
-2. If this image is NOT a Battle Royale post-match scoreboard (for example if it is a Squad Fight screen, 1v1/2v2 Custom match, lobby menu, profile screen, or non-game image), you MUST return "valid": false and a descriptive "rejectionReason" (e.g., "Image rejected: Screenshot is not a valid Battle Royale post-match scoreboard. Please upload a BR result screen matching the BR format.").
-3. IMPORTANT - PLAYER HIGHLIGHT RULE: In Blood Strike, the submitting player's row is HIGHLIGHTED IN YELLOW or framed with a distinct yellow/gold border. You MUST ONLY record the stats of the player whose row is highlighted in yellow. Ignore all other player rows!
-4. EXTRACT:
-   - highlightedIgn: In-game name of the yellow-highlighted player
-   - kills: integer from KILLS column for the yellow row
-   - assists: integer from Assist column for the yellow row
-   - damage: integer from Damage column for the yellow row
-   - cash: integer from Cash column for the yellow row
-   - placement: integer (1 for Victory/1st, 2 for 2nd, 3 for 3rd, 4 for 4th, 5+ for 5th or lower)
-   - placementText: exact placement text shown (e.g. "1/12 Victory" or "#2/12")
-   - outcome: "Victory" if placement is 1, otherwise "Defeat"
-`;
-      } else if (mode === 'SF') {
-        systemInstruction = `You are a high-precision OCR and game scoreboard analyzer for Blood Strike Squad Fight (SF) post-match screens.
-CRITICAL VALIDATION RULES FOR SF:
-1. The screenshot MUST be a Squad Fight post-match scoreboard. Look for:
-   - "Squad Fight" mode header or Top-left match outcome banner ("Victory" or "Defeat" with team scores e.g., 4 vs 3 or similar)
-   - Two team rosters (Blue Team and Red Team) with columns: [Players, KILLS, Assists, Death, Damage].
-2. If this image is NOT a Squad Fight post-match scoreboard (for example if it is a Battle Royale screen, Custom 1v1/2v2 screen, main menu, or unrelated image), you MUST return "valid": false and a descriptive "rejectionReason" (e.g., "Image rejected: Screenshot is not a valid Squad Fight scoreboard. Please upload an SF result screen matching the SF format.").
-3. IMPORTANT - PLAYER HIGHLIGHT RULE: In Blood Strike, the submitting player's row is HIGHLIGHTED IN YELLOW or framed with a distinct yellow border. You MUST ONLY record the stats of the player whose row is highlighted in yellow.
-4. EXTRACT:
-   - highlightedIgn: In-game name of the yellow-highlighted player
-   - kills: integer from KILLS column for the yellow row
-   - assists: integer from Assists column for the yellow row
-   - deaths: integer from Death column for the yellow row
-   - damage: integer from Damage column for the yellow row
-   - outcome: "Victory" or "Defeat" from the top-left banner
-`;
-      } else if (mode === 'CUSTOM') {
-        systemInstruction = `You are a high-precision OCR and game scoreboard analyzer for Blood Strike Custom Match / Team Deathmatch screens (including 1v1 and 2v2).
-CRITICAL VALIDATION RULES FOR CUSTOM:
-1. The screenshot MUST be a Custom Match or Team Deathmatch post-match summary (supports 1v1.jpg, 2v2.jpg, or custom deathmatch formats). Look for:
-   - Top-left "Victory" or "Defeat" banner with big team round score numbers (e.g. 19 vs 10, 35 vs 27)
-   - Two team tables with columns: [Players, KILLS, Damage].
-2. If this image is NOT a Custom / 1v1 / 2v2 match result screen (for example if it is a standard Battle Royale screen, standard Squad Fight screen, or unrelated picture), you MUST return "valid": false and a descriptive "rejectionReason" (e.g., "Image rejected: Screenshot is not a valid Custom 1v1 / 2v2 match scoreboard. Please upload a Custom result screen.").
-3. IMPORTANT - PLAYER HIGHLIGHT RULE: The submitting player's row is HIGHLIGHTED IN YELLOW. You MUST ONLY record the stats of the player highlighted in yellow.
-4. EXTRACT:
-   - highlightedIgn: In-game name of the yellow-highlighted player
-   - kills: integer from KILLS column for the yellow row
-   - damage: integer from Damage column for the yellow row
-   - outcome: "Victory" or "Defeat" from the top-left banner
-   - teamFormat: format detected (e.g., "1v1", "2v2", "3v3", "TDM")
-`;
-      }
+      const systemInstruction = `You are a high-precision OCR and game scoreboard analyzer for NetEase Blood Strike post-match screens.
 
-      const promptText = `Analyze this Blood Strike screenshot for mode "${mode}". Return pure JSON matching this schema:
+CRITICAL MODE & SCREEN TYPE DETECTION:
+Examine the screenshot and determine the exact match category (detectedScreenType):
+1. "BR": Battle Royale post-match scoreboard (Look for 12-team ranking table e.g. "1/12 Victory", "#2/12", columns [Players, KILLS, Assist, Damage, Cash]).
+2. "SF": Squad Fight post-match scoreboard (Look for 4v4 round scores banner, Blue Team vs Red Team rosters with columns [Players, KILLS, Assists, Death, Damage]).
+3. "CUSTOM": Custom match or Deathmatch scoreboard (Supports 1v1, 2v2, or Custom TDM formats with round points banner and team tables [Players, KILLS, Damage]).
+4. "UNKNOWN": Not a valid Blood Strike post-match scoreboard (lobby, settings, weapon loadout, non-game picture).
+
+CRITICAL PLAYER HIGHLIGHT EXTRACTION RULE:
+In Blood Strike, the active submitting operative's row is visually HIGHLIGHTED IN YELLOW (or framed with a bright golden-yellow highlight box).
+You MUST ONLY extract the in-game name and numbers for the yellow-highlighted player! Ignore all other player rows!
+
+MODE COMPLIANCE RULE:
+The user selected OCR card category "${mode}".
+- If detectedScreenType equals "${mode}", then valid = true.
+- If detectedScreenType is a valid Blood Strike match but does NOT equal "${mode}", set valid = false, rejectionType = "MODE_MISMATCH", recommendedMode = (detectedScreenType as "BR" | "SF" | "CUSTOM"), and recommend the appropriate OCR card. (No penalty).
+- If detectedScreenType is "UNKNOWN", set valid = false, rejectionType = "NOT_A_SCOREBOARD".`;
+
+      const promptText = `Analyze this Blood Strike screenshot for expected mode "${mode}". Return pure JSON matching this exact schema:
 {
-  "valid": true,
-  "rejectionReason": "string (only if valid is false)",
-  "highlightedIgn": "string",
+  "detectedScreenType": "BR" | "SF" | "CUSTOM" | "UNKNOWN",
+  "valid": true | false,
+  "rejectionType": "NONE" | "MODE_MISMATCH" | "NOT_A_SCOREBOARD" | "OTHER",
+  "rejectionReason": "string",
+  "recommendedMode": "BR" | "SF" | "CUSTOM" | null,
+  "recommendedCard": "string (e.g. 'SF (Squad Fight)' or 'BR (Battle Royale)' or 'Custom Match')",
+  "highlightedIgn": "string (exact name of the yellow-highlighted player row)",
   "kills": 0,
   "assists": 0,
   "deaths": 0,
   "damage": 0,
   "placement": 1,
   "placementText": "string",
-  "outcome": "Victory",
+  "outcome": "Victory" | "Defeat",
   "cash": 0,
   "teamFormat": "string"
 }`;
@@ -984,20 +861,117 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
         parsed = JSON.parse(responseText);
       } catch (err) {
         console.error('Failed to parse Gemini OCR JSON response:', responseText);
-        parsed = { valid: false, rejectionReason: 'Failed to parse image analysis results.' };
+        parsed = { valid: false, rejectionType: 'OTHER', rejectionReason: 'Failed to parse image analysis results.' };
       }
 
-      if (!parsed.valid) {
+      // Check for Wrong Screenshot Type in Wrong OCR Card (NO PENALTY)
+      const detectedType = parsed.detectedScreenType || (parsed.valid ? mode : 'UNKNOWN');
+      if (detectedType !== mode && (detectedType === 'BR' || detectedType === 'SF' || detectedType === 'CUSTOM')) {
+        const cardNames: Record<string, string> = {
+          BR: 'BR (Battle Royale)',
+          SF: 'SF (Squad Fight)',
+          CUSTOM: 'Custom Match (1v1 / 2v2)'
+        };
+        const currentCardName = cardNames[mode] || mode;
+        const recommendedCardName = cardNames[detectedType] || detectedType;
+
         return res.json({
           success: true,
           valid: false,
-          rejectionReason: parsed.rejectionReason || `The uploaded image does not match the required ${mode} screenshot structure.`,
+          fraudDetected: false,
+          penaltyApplied: false,
+          penaltyXp: 0,
+          rejectionType: 'MODE_MISMATCH',
+          rejectionReason: `Screenshot category mismatch: Detected ${recommendedCardName} scoreboard inside the ${currentCardName} OCR card.`,
+          recommendedMode: detectedType,
+          recommendedCard: recommendedCardName,
+          mode,
+          message: `Wrong OCR card selected. Recommended Card: ${recommendedCardName}. (No penalty applied)`
+        });
+      }
+
+      if (!parsed.valid || detectedType === 'UNKNOWN') {
+        return res.json({
+          success: true,
+          valid: false,
+          fraudDetected: false,
+          penaltyApplied: false,
+          penaltyXp: 0,
+          rejectionType: 'NOT_A_SCOREBOARD',
+          rejectionReason: parsed.rejectionReason || `The uploaded image does not match the required ${mode} scoreboard structure.`,
           mode
         });
       }
 
+      const extractedIgn = (parsed.highlightedIgn || '').trim() || 'OPERATIVE';
+
+      // --- FRAUD CHECK: Compare highlighted IGN in screenshot to player IGN ---
+      if (activeTargetIgn && !areIgnsMatching(extractedIgn, activeTargetIgn)) {
+        console.warn(`[OCR FRAUD DETECTED] Screenshot highlighted player "${extractedIgn}" does not match player IGN "${activeTargetIgn}".`);
+
+        // Deduct 20 XP penalty from the player
+        let penalizedPlayer: Player | undefined;
+        const targetIndex = dbPlayers.findIndex(
+          p => (xnId && p.xnId.toLowerCase() === xnId.toLowerCase()) || (p.ign && areIgnsMatching(p.ign, activeTargetIgn))
+        );
+
+        if (targetIndex !== -1) {
+          const targetPlayer = dbPlayers[targetIndex];
+          const currentXp = targetPlayer.totalXp ?? 0;
+          const newXp = Math.max(0, currentXp - 20);
+          const newRank = calculateRank(newXp);
+
+          penalizedPlayer = {
+            ...targetPlayer,
+            totalXp: newXp,
+            currentRank: newRank
+          };
+          dbPlayers[targetIndex] = penalizedPlayer;
+
+          // Record Audit Log for Penalty
+          const auditLog: AuditLog = {
+            id: `log-${Date.now()}`,
+            action: 'FRAUD_ATTEMPT_PENALTY',
+            timestamp: new Date().toISOString(),
+            actorType: 'system',
+            details: `Fraud attempt penalty, 20xp: Operative ${targetPlayer.displayName} (${targetPlayer.xnId}) submitted a scoreboard with highlighted player "${extractedIgn}" differing from registered IGN "${activeTargetIgn}". Deducted 20 XP.`
+          };
+          dbAuditLogs.unshift(auditLog);
+
+          // Dispatch Notification to Player
+          dbNotifications.unshift({
+            id: `notif-${Date.now()}`,
+            recipientXnId: targetPlayer.xnId,
+            title: 'FRAUD ATTEMPT PENALTY (-20 XP)',
+            message: `Fraud attempt penalty, 20xp: Screenshot yellow-highlighted player name ("${extractedIgn}") does not match your registered IGN ("${activeTargetIgn}").`,
+            type: 'system',
+            priority: 'urgent',
+            createdAt: new Date().toISOString(),
+            read: false,
+            sender: 'HQ Anti-Fraud Security'
+          });
+
+          saveDatabase();
+        }
+
+        return res.json({
+          success: true,
+          valid: false,
+          fraudDetected: true,
+          penaltyApplied: true,
+          penaltyXp: 20,
+          highlightedIgn: extractedIgn,
+          expectedIgn: activeTargetIgn,
+          message: 'Fraud attempt penalty, 20xp',
+          rejectionReason: `Fraud attempt penalty, 20xp: The yellow-highlighted player in the screenshot ("${extractedIgn}") does not match your operative IGN ("${activeTargetIgn}"). 20 XP has been deducted from your profile.`,
+          mode,
+          player: penalizedPlayer
+        });
+      }
+
+      // Valid match extraction
       const extracted = {
-        highlightedIgn: parsed.highlightedIgn || 'OPERATIVE',
+        highlightedIgn: extractedIgn,
         kills: Math.max(0, Math.round(Number(parsed.kills) || 0)),
         assists: Math.max(0, Math.round(Number(parsed.assists) || 0)),
         deaths: Math.max(0, Math.round(Number(parsed.deaths) || 0)),
@@ -1022,9 +996,12 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       res.json({
         success: true,
         valid: true,
+        fraudDetected: false,
+        penaltyApplied: false,
         mode,
         extracted,
-        scoreBreakdown
+        scoreBreakdown,
+        message: `OCR verification successful for operative ${extracted.highlightedIgn}`
       });
     } catch (err: any) {
       console.error('[OCR Error]', err);
@@ -1058,17 +1035,16 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   app.post('/api/submissions', (req: Request, res: Response) => {
     const { xnId, stats, mode = 'BR', evidenceUrl } = req.body;
 
-    const cleanXnId = (xnId || '').trim().toLowerCase();
-    const player = dbPlayers.find(
-      p =>
-        (p.xnId && p.xnId.trim().toLowerCase() === cleanXnId) ||
-        (p.id && p.id.trim().toLowerCase() === cleanXnId) ||
-        (p.username && p.username.trim().toLowerCase() === cleanXnId) ||
-        (p.ign && p.ign.trim().toLowerCase() === cleanXnId)
+    const player = dbPlayers.find(p => 
+      (xnId && p.xnId && p.xnId.toLowerCase() === String(xnId).toLowerCase()) ||
+      (xnId && p.id && p.id.toLowerCase() === String(xnId).toLowerCase()) ||
+      (req.body.playerIgn && p.ign && areIgnsMatching(p.ign, req.body.playerIgn)) ||
+      (req.body.playerName && p.displayName && p.displayName.toLowerCase() === String(req.body.playerName).toLowerCase()) ||
+      (req.body.playerName && p.username && p.username.toLowerCase() === String(req.body.playerName).toLowerCase())
     );
-    const resolvedXnId = player ? player.xnId : (xnId || 'XN-UNKNOWN');
     const playerName = player ? player.displayName : req.body.playerName || 'Recruit Operative';
     const playerIgn = player ? player.ign : req.body.playerIgn || 'OPERATIVE';
+    const officialXnId = player ? player.xnId : (xnId || 'XN-UNKNOWN');
 
     const subMode: SitrepMode = stats?.mode || mode || 'BR';
     const safeStats: SubmissionStats = {
@@ -1097,7 +1073,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
 
     const newSub: Submission = {
       id: `sub-${Math.floor(1000 + Math.random() * 9000)}`,
-      xnId: resolvedXnId,
+      xnId: officialXnId,
       playerName,
       playerIgn,
       createdAt: new Date().toISOString(),
@@ -1124,8 +1100,8 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
     res.status(201).json({ submission: newSub, auditLog: log });
   });
 
-  // POST approve submission (Updates cumulative win rate, XP & rank thresholds)
-  app.post('/api/submissions/:id/approve', requireAdmin, (req: Request, res: Response) => {
+  // POST approve submission (Updates cumulative win rate & rank thresholds)
+  app.post('/api/submissions/:id/approve', (req: Request, res: Response) => {
     const { id } = req.params;
     const subIndex = dbSubmissions.findIndex(s => s.id === id);
 
@@ -1138,33 +1114,19 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       return res.status(400).json({ error: 'Submission is already approved' });
     }
 
-    const awardedXp = sub.scoreBreakdown?.total ?? calculateSubmissionScore(sub.stats).total;
-    
-    // Find target player with comprehensive case-insensitive and identifier matching
-    const subXnId = (sub.xnId || '').trim().toLowerCase();
-    const subPlayerName = (sub.playerName || '').trim().toLowerCase();
-    const subPlayerIgn = (sub.playerIgn || '').trim().toLowerCase();
-
-    let targetPlayerIndex = dbPlayers.findIndex(p => {
-      const pXnId = (p.xnId || '').trim().toLowerCase();
-      const pId = (p.id || '').trim().toLowerCase();
-      const pUsername = (p.username || '').trim().toLowerCase();
-      const pIgn = (p.ign || '').trim().toLowerCase();
-      const pName = (p.displayName || '').trim().toLowerCase();
-
-      return (
-        (pXnId && subXnId && pXnId === subXnId) ||
-        (pId && subXnId && pId === subXnId) ||
-        (pUsername && subXnId && pUsername === subXnId) ||
-        (pIgn && subPlayerIgn && pIgn === subPlayerIgn) ||
-        (pName && subPlayerName && pName === subPlayerName)
-      );
-    });
+    const awardedXp = sub.scoreBreakdown.total;
+    const targetPlayerIndex = dbPlayers.findIndex(
+      p => (sub.xnId && p.xnId && p.xnId.toLowerCase() === sub.xnId.toLowerCase()) ||
+           (sub.xnId && p.id && p.id.toLowerCase() === sub.xnId.toLowerCase()) ||
+           (sub.playerIgn && p.ign && areIgnsMatching(p.ign, sub.playerIgn)) ||
+           (sub.playerName && p.displayName && p.displayName.toLowerCase() === sub.playerName.toLowerCase()) ||
+           (sub.playerName && p.username && p.username.toLowerCase() === sub.playerName.toLowerCase())
+    );
 
     const updatedSub: Submission = {
       ...sub,
       status: 'approved',
-      reviewedBy: req.body.reviewedBy || (req as any).admin?.displayName || 'Admin_Lead',
+      reviewedBy: req.body.reviewedBy || 'Admin_Lead',
       reviewedAt: new Date().toISOString()
     };
     dbSubmissions[subIndex] = updatedSub;
@@ -1177,27 +1139,25 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       const newRank = calculateRank(newTotalXp);
 
       const oldStats = targetPlayer.lifetimeStats || { kills: 0, wins: 0, matches: 0, kd: 0, winRate: 0, hs: 0 };
-      const subMatches = sub.stats?.matches || 1;
-      const totalMatches = (oldStats.matches || 0) + subMatches;
-      const subWins = sub.stats?.wins !== undefined ? sub.stats.wins : (sub.stats?.outcome === 'Victory' || sub.stats?.placement === 1 ? 1 : 0);
-      const totalWins = (oldStats.wins || 0) + subWins;
-      const totalKills = (oldStats.kills || 0) + (sub.stats?.kills || 0);
+      const totalMatches = (oldStats.matches || 0) + (sub.stats.matches || 1);
+      const totalWins = (oldStats.wins || 0) + (sub.stats.wins || 0);
+      const totalKills = (oldStats.kills || 0) + (sub.stats.kills || 0);
       
-      const updatedKd = totalMatches > 0 ? parseFloat((totalKills / Math.max(1, totalMatches * 0.8)).toFixed(2)) : (Number(sub.stats?.kd) || 0);
+      const subDeaths = sub.stats.deaths !== undefined ? sub.stats.deaths : (sub.stats.outcome === 'Defeat' ? 1 : 0);
+      const oldDeaths = (oldStats.matches && oldStats.kd && oldStats.kd > 0) ? Math.round(oldStats.kills / oldStats.kd) : 0;
+      const totalDeaths = Math.max(1, oldDeaths + subDeaths);
+      const updatedKd = totalDeaths > 0 ? parseFloat((totalKills / totalDeaths).toFixed(2)) : totalKills;
+      
+      // Cumulative win rate calculation: totalWins / totalMatches * 100
       const updatedWinRate = totalMatches > 0 
         ? parseFloat(((totalWins / totalMatches) * 100).toFixed(1)) 
         : 0;
-
-      const rankTiersOrder: RankTier[] = ['E', 'D', 'C', 'B', 'A', 'S', 'S-MAX'];
-      const oldPeakIndex = rankTiersOrder.indexOf(targetPlayer.peakRank || 'E');
-      const newRankIndex = rankTiersOrder.indexOf(newRank);
-      const peakRank = newRankIndex > oldPeakIndex ? newRank : (targetPlayer.peakRank || newRank);
 
       updatedPlayer = {
         ...targetPlayer,
         totalXp: newTotalXp,
         currentRank: newRank,
-        peakRank: peakRank,
+        peakRank: RANK_ORDER[newRank] > (RANK_ORDER[targetPlayer.peakRank] || 0) ? newRank : targetPlayer.peakRank,
         lifetimeStats: {
           ...oldStats,
           kills: totalKills,
@@ -1210,36 +1170,18 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
 
       dbPlayers[targetPlayerIndex] = updatedPlayer;
 
-      // Create operative in-app notification
-      const notif: AppNotification = {
+      // Dispatch Notification to Operative
+      dbNotifications.unshift({
         id: `notif-${Date.now()}`,
-        title: 'SITREP Telemetry Approved',
-        message: `Your SITREP (${sub.id} - ${sub.mode || 'BR'}) was verified and approved by ${updatedSub.reviewedBy}. +${awardedXp} XP awarded. Your total is now ${newTotalXp.toLocaleString()} XP (${newRank} Rank).`,
-        createdAt: new Date().toISOString(),
-        type: 'sitrep',
-        priority: 'urgent',
-        read: false,
         recipientXnId: targetPlayer.xnId,
-        linkView: 'dashboard',
-        sender: updatedSub.reviewedBy
-      };
-      dbNotifications.unshift(notif);
-
-      if (newRank !== targetPlayer.currentRank && newRankIndex > rankTiersOrder.indexOf(targetPlayer.currentRank || 'E')) {
-        const promotionNotif: AppNotification = {
-          id: `notif-promo-${Date.now()}`,
-          title: `🎉 Rank Ascended: ${newRank} Tier!`,
-          message: `Operative ${targetPlayer.displayName}, your clearance has ascended to ${newRank} Rank (${newTotalXp.toLocaleString()} XP). Inspect your updated dossier HUD.`,
-          createdAt: new Date().toISOString(),
-          type: 'rank',
-          priority: 'urgent',
-          read: false,
-          recipientXnId: targetPlayer.xnId,
-          linkView: 'dashboard',
-          sender: 'Head of Command'
-        };
-        dbNotifications.unshift(promotionNotif);
-      }
+        title: `SITREP APPROVED (+${awardedXp} XP)`,
+        message: `Your SITREP (${sub.id} - ${sub.mode || 'BR'}) has been verified and approved by ${updatedSub.reviewedBy}. +${awardedXp} XP credited to your profile. (Current Total: ${newTotalXp.toLocaleString()} XP · Rank ${newRank})`,
+        type: 'system',
+        priority: 'normal',
+        createdAt: new Date().toISOString(),
+        read: false,
+        sender: 'HQ Command Review'
+      });
     }
 
     const log: AuditLog = {
@@ -1247,7 +1189,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       action: 'SUBMISSION_APPROVED',
       timestamp: new Date().toISOString(),
       actorType: 'admin',
-      details: `${sub.id} (${sub.playerName}) approved by ${updatedSub.reviewedBy}. +${awardedXp} XP awarded.`
+      details: `${sub.id} (${sub.playerName}) approved by ${updatedSub.reviewedBy}. +${awardedXp} XP awarded to ${updatedPlayer ? `${updatedPlayer.displayName} (${updatedPlayer.xnId})` : sub.xnId}.`
     };
     dbAuditLogs.unshift(log);
     saveDatabase();
@@ -1256,7 +1198,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST flag submission
-  app.post('/api/submissions/:id/flag', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/submissions/:id/flag', (req: Request, res: Response) => {
     const { id } = req.params;
     const subIndex = dbSubmissions.findIndex(s => s.id === id);
 
@@ -1284,7 +1226,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST reject submission
-  app.post('/api/submissions/:id/reject', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/submissions/:id/reject', (req: Request, res: Response) => {
     const { id } = req.params;
     const { reason, reviewedBy } = req.body;
     const subIndex = dbSubmissions.findIndex(s => s.id === id);
@@ -1367,40 +1309,36 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       return res.status(400).json({ error: 'Username, display name, and password are required' });
     }
 
-    bcrypt.hash(String(password), 10).then((passwordHash) => {
-      const firstAdmin: AdminUser = {
-        id: `admin-${Date.now()}`,
-        username: username.trim(),
-        email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
-        displayName: displayName.trim(),
-        password: passwordHash,
-        role: 'HEAD_OF_COMMAND',
-        isHeadOfCommand: true,
-        linkedXnId: linkedXnId || undefined,
-        createdAt: new Date().toISOString()
-      };
+    const firstAdmin: AdminUser = {
+      id: `admin-${Date.now()}`,
+      username: username.trim(),
+      email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+      displayName: displayName.trim(),
+      password: String(password),
+      role: 'HEAD_OF_COMMAND',
+      isHeadOfCommand: true,
+      linkedXnId: linkedXnId || undefined,
+      createdAt: new Date().toISOString()
+    };
 
-      dbAdmins.push(firstAdmin);
+    dbAdmins.push(firstAdmin);
 
-      const log: AuditLog = {
-        id: `log-${Date.now()}`,
-        action: 'HEAD_OF_COMMAND_PROVISIONED',
-        timestamp: new Date().toISOString(),
-        actorType: 'hoc',
-        details: `Supreme Head of Command authority assigned to ${displayName} (@${username}). Direct admin registration locked.`
-      };
-      dbAuditLogs.unshift(log);
-      saveDatabase();
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'HEAD_OF_COMMAND_PROVISIONED',
+      timestamp: new Date().toISOString(),
+      actorType: 'hoc',
+      details: `Supreme Head of Command authority assigned to ${displayName} (@${username}). Direct admin registration locked.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
 
-      const token = signAdminToken(firstAdmin.id);
-      const { password: _, ...safeAdmin } = firstAdmin;
-      res.status(201).json({
-        message: 'Head of Command profile initialized successfully.',
-        admin: safeAdmin,
-        token,
-        auditLog: log
-      });
-    }).catch(() => res.status(500).json({ error: 'Failed to initialize Head of Command account' }));
+    const { password: _, ...safeAdmin } = firstAdmin;
+    res.status(201).json({
+      message: 'Head of Command profile initialized successfully.',
+      admin: safeAdmin,
+      auditLog: log
+    });
   });
 
   // POST Request Admin Access
@@ -1426,37 +1364,34 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       username: username.trim(),
       email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
       displayName: displayName.trim(),
-      password: '',
+      password: String(password),
       reason: reason ? reason.trim() : 'Competitive staff supervisor & telemetry audit officer application.',
       status: 'pending',
       requestedAt: new Date().toISOString()
     };
 
-    bcrypt.hash(String(password), 10).then((passwordHash) => {
-      newRequest.password = passwordHash;
-      dbAdminRequests.unshift(newRequest);
+    dbAdminRequests.unshift(newRequest);
 
-      const log: AuditLog = {
-        id: `log-${Date.now()}`,
-        action: 'ADMIN_CLEARANCE_REQUESTED',
-        timestamp: new Date().toISOString(),
-        actorType: 'system',
-        details: `Staff clearance application submitted by ${displayName} (@${username}). Pending Head of Command review.`
-      };
-      dbAuditLogs.unshift(log);
-      saveDatabase();
+    const log: AuditLog = {
+      id: `log-${Date.now()}`,
+      action: 'ADMIN_CLEARANCE_REQUESTED',
+      timestamp: new Date().toISOString(),
+      actorType: 'system',
+      details: `Staff clearance application submitted by ${displayName} (@${username}). Pending Head of Command review.`
+    };
+    dbAuditLogs.unshift(log);
+    saveDatabase();
 
-      res.status(201).json({
-        message: 'Clearance application submitted. Awaiting Head of Command approval.',
-        request: {
-          id: newRequest.id,
-          username: newRequest.username,
-          displayName: newRequest.displayName,
-          status: newRequest.status,
-          requestedAt: newRequest.requestedAt
-        }
-      });
-    }).catch(() => res.status(500).json({ error: 'Failed to submit clearance request' }));
+    res.status(201).json({
+      message: 'Clearance application submitted. Awaiting Head of Command approval.',
+      request: {
+        id: newRequest.id,
+        username: newRequest.username,
+        displayName: newRequest.displayName,
+        status: newRequest.status,
+        requestedAt: newRequest.requestedAt
+      }
+    });
   });
 
   // POST Admin Login
@@ -1489,35 +1424,15 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       return res.status(404).json({ error: 'No authorized staff account found with provided credentials' });
     }
 
-    const checkPassword = async () => {
-      if (admin.password) {
-        // Existing accounts created before this fix may still have a
-        // plaintext password on file; verify with bcrypt if it looks
-        // like a bcrypt hash, otherwise fall back to a one-time plain
-        // comparison and transparently upgrade it to a real hash.
-        const looksHashed = admin.password.startsWith('$2a$') || admin.password.startsWith('$2b$');
-        const ok = looksHashed
-          ? await bcrypt.compare(String(password), admin.password)
-          : admin.password === String(password);
-        if (!ok) return false;
-        if (!looksHashed) {
-          admin.password = await bcrypt.hash(String(password), 10);
-          saveDatabase();
-        }
-      }
-      return true;
-    };
+    if (admin.password && admin.password !== String(password)) {
+      return res.status(401).json({ error: 'Invalid security clearance passkey' });
+    }
 
-    checkPassword().then((ok) => {
-      if (!ok) return res.status(401).json({ error: 'Invalid security clearance passkey' });
-      const token = signAdminToken(admin.id);
-      const { password: _, ...safeAdmin } = admin;
-      res.json({
-        admin: safeAdmin,
-        token,
-        message: `${admin.isHeadOfCommand ? 'Head of Command' : 'Staff Officer'} clearance validated.`
-      });
-    }).catch(() => res.status(500).json({ error: 'Authentication failed' }));
+    const { password: _, ...safeAdmin } = admin;
+    res.json({
+      admin: safeAdmin,
+      message: `${admin.isHeadOfCommand ? 'Head of Command' : 'Staff Officer'} clearance validated.`
+    });
   });
 
   // GET all admin clearance requests
@@ -1527,7 +1442,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST approve admin clearance request (HoC or staff)
-  app.post('/api/admin/requests/:id/approve', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/admin/requests/:id/approve', (req: Request, res: Response) => {
     const { id } = req.params;
     const reqIndex = dbAdminRequests.findIndex(r => r.id === id);
 
@@ -1581,7 +1496,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST reject admin clearance request
-  app.post('/api/admin/requests/:id/reject', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/admin/requests/:id/reject', (req: Request, res: Response) => {
     const { id } = req.params;
     const reqIndex = dbAdminRequests.findIndex(r => r.id === id);
 
@@ -1608,7 +1523,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // GET list of all admins
-  app.get('/api/admin/list', requireAdmin, (req: Request, res: Response) => {
+  app.get('/api/admin/list', (req: Request, res: Response) => {
     const safeAdmins = dbAdmins.map(({ password: _, ...a }) => a);
     res.json({ admins: safeAdmins });
   });
@@ -1619,7 +1534,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   // =========================================================================
 
   // POST HoC: Reset ALL ranks across the network
-  app.post('/api/admin/hoc/reset-all-ranks', requireHeadOfCommand, (req: Request, res: Response) => {
+  app.post('/api/admin/hoc/reset-all-ranks', (req: Request, res: Response) => {
     const { hocUsername, reason } = req.body;
 
     // Verify caller has Head of Command authority
@@ -1653,7 +1568,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST HoC: Reset an individual player's rank
-  app.post('/api/admin/hoc/reset-player-rank', requireHeadOfCommand, (req: Request, res: Response) => {
+  app.post('/api/admin/hoc/reset-player-rank', (req: Request, res: Response) => {
     const { xnId, hocUsername, reason } = req.body;
 
     if (!xnId) {
@@ -1693,7 +1608,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST HoC: Deduct XP from an operative
-  app.post('/api/admin/hoc/deduct-xp', requireHeadOfCommand, (req: Request, res: Response) => {
+  app.post('/api/admin/hoc/deduct-xp', (req: Request, res: Response) => {
     const { xnId, amount, hocUsername, reason } = req.body;
 
     if (!xnId) {
@@ -1741,7 +1656,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   // Admin can give out 50xp to any player as a reward ONLY when he crosses A rank (XP >= 5000 / Rank >= A).
   // Head of Command can reward at any time.
   // =========================================================================
-  app.post('/api/admin/reward-player', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/admin/reward-player', (req: Request, res: Response) => {
     const { xnId, adminUsername, amount, reason } = req.body;
 
     if (!xnId) {
@@ -1815,7 +1730,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // --- ACADEMY OPERATIONS: ADD PLAYER TO SYSTEM ---
-  app.post('/api/admin/players/add', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/admin/players/add', (req: Request, res: Response) => {
     const {
       displayName,
       ign,
@@ -1919,7 +1834,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // --- ACADEMY OPERATIONS: REMOVE PLAYER FROM SYSTEM ---
-  app.delete('/api/admin/players/:xnId', requireAdmin, (req: Request, res: Response) => {
+  app.delete('/api/admin/players/:xnId', (req: Request, res: Response) => {
     const { xnId } = req.params;
     const { reason, adminUsername } = req.body;
 
@@ -1949,7 +1864,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // --- LOCK & CALIBRATE TELEMETRY METRIC (BASED ON PLAYER REPORT) ---
-  app.post('/api/admin/players/:xnId/calibrate-telemetry', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/admin/players/:xnId/calibrate-telemetry', (req: Request, res: Response) => {
     const { xnId } = req.params;
     const {
       kills,
@@ -2062,7 +1977,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST send notification (HoC / Admin broadcast or direct)
-  app.post('/api/notifications/send', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/notifications/send', (req: Request, res: Response) => {
     const {
       recipientXnId = 'ALL',
       title,
@@ -2156,7 +2071,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST create event (HoC / Admin)
-  app.post('/api/events', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/events', (req: Request, res: Response) => {
     const {
       title,
       eventType = 'TOURNAMENT',
@@ -2224,7 +2139,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // DELETE event
-  app.delete('/api/events/:id', requireAdmin, (req: Request, res: Response) => {
+  app.delete('/api/events/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     const { adminUsername } = req.body;
     const eventIndex = dbEvents.findIndex(e => e.id === id);

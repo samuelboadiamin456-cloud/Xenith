@@ -29,7 +29,7 @@ export const PublicProfileView: React.FC = () => {
   const [copied, setCopied] = React.useState(false);
 
   const targetXnId = selectedProfileXnId || currentPlayer?.xnId || (players[0] ? players[0].xnId : null);
-  const player = players.find(p => p.xnId === targetXnId) || players[0] || null;
+  const player = players.find(p => targetXnId && p.xnId.toLowerCase() === targetXnId.toLowerCase()) || players[0] || null;
 
   if (!player) {
     return (

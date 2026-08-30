@@ -25,7 +25,7 @@ import { SubmissionStats, SitrepMode } from '../types';
 import { api } from '../services/api';
 
 export const SubmitSitrepView: React.FC = () => {
-  const { currentPlayer, createSubmission, setActiveView, showToast, openAuthModal } = useApp();
+  const { currentPlayer, createSubmission, setActiveView, showToast, openAuthModal, refreshPlayers } = useApp();
 
   const [activeMode, setActiveMode] = useState<SitrepMode>('BR');
 
@@ -52,7 +52,21 @@ export const SubmitSitrepView: React.FC = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [ocrStatus, setOcrStatus] = useState<string | null>(null);
   const [rejectionError, setRejectionError] = useState<string | null>(null);
-  const [yellowHighlightDetected, setYellowHighlightDetected] = useState<string | null>('ARC EBŰZZY (Yellow Highlighted Active Player)');
+  const [fraudPenaltyAlert, setFraudPenaltyAlert] = useState<{
+    detected: boolean;
+    penaltyXp: number;
+    highlightedIgn?: string;
+    expectedIgn?: string;
+    message: string;
+  } | null>(null);
+  const [modeMismatchAlert, setModeMismatchAlert] = useState<{
+    recommendedMode: SitrepMode;
+    recommendedCard: string;
+    message: string;
+  } | null>(null);
+  const [yellowHighlightDetected, setYellowHighlightDetected] = useState<string | null>(
+    currentPlayer?.ign ? `${currentPlayer.ign} (Yellow Highlight Active Player)` : 'ARC EBŰZZY (Yellow Highlight Active Player)'
+  );
 
   const scoreBreakdown = calculateSubmissionScore(stats);
 
@@ -203,6 +217,8 @@ export const SubmitSitrepView: React.FC = () => {
   const handleModeSelect = (newMode: SitrepMode) => {
     setActiveMode(newMode);
     setRejectionError(null);
+    setFraudPenaltyAlert(null);
+    setModeMismatchAlert(null);
     // Switch to first preset of the chosen mode
     const preset = modePresets[newMode][0];
     if (preset) {
@@ -219,6 +235,8 @@ export const SubmitSitrepView: React.FC = () => {
     if (!file) return;
 
     setRejectionError(null);
+    setFraudPenaltyAlert(null);
+    setModeMismatchAlert(null);
     const reader = new FileReader();
     reader.onload = async () => {
       const base64Img = reader.result as string;
@@ -228,18 +246,55 @@ export const SubmitSitrepView: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const executeOcrScan = async (imgData: string, mode: SitrepMode) => {
+  const executeOcrScan = async (imgData: string, mode: SitrepMode, overrideIgn?: string) => {
     setIsScanning(true);
     setOcrStatus(`Initializing AI OCR validation for ${mode} screenshot structure...`);
     setRejectionError(null);
+    setFraudPenaltyAlert(null);
+    setModeMismatchAlert(null);
 
     try {
-      setOcrStatus(`Verifying scoreboard format against ${mode === 'BR' ? 'BR.jpg' : mode === 'SF' ? 'SF.jpg' : '1v1.jpg / 2v2.jpg'} template...`);
+      setOcrStatus(`Verifying scoreboard format and player identity against registered IGN...`);
       
+      const activeIgn = overrideIgn || currentPlayer?.ign || 'ARC EBŰZZY';
       const result = await api.scanSitrepOcr({
         image: imgData,
-        mode
+        mode,
+        playerIgn: activeIgn,
+        xnId: currentPlayer?.xnId
       });
+
+      // Handle Fraud Attempt Detection (Mismatched Highlighted IGN -> Deduct 20 XP)
+      if (result.fraudDetected || result.penaltyApplied) {
+        setIsScanning(false);
+        setOcrStatus(null);
+        const penaltyMsg = result.message || 'Fraud attempt penalty, 20xp';
+        setFraudPenaltyAlert({
+          detected: true,
+          penaltyXp: result.penaltyXp || 20,
+          highlightedIgn: result.highlightedIgn,
+          expectedIgn: result.expectedIgn || activeIgn,
+          message: penaltyMsg
+        });
+        setRejectionError(result.rejectionReason || `${penaltyMsg}: Highlighted player name differs from your registered IGN.`);
+        showToast(penaltyMsg, 'error');
+        await refreshPlayers();
+        return;
+      }
+
+      // Handle Mode Mismatch (Wrong Screenshot in Wrong Card -> No Penalty, Suggests Card)
+      if (result.rejectionType === 'MODE_MISMATCH' || (!result.valid && result.recommendedCard)) {
+        setIsScanning(false);
+        setOcrStatus(null);
+        setModeMismatchAlert({
+          recommendedMode: result.recommendedMode || 'SF',
+          recommendedCard: result.recommendedCard || 'SF (Squad Fight)',
+          message: result.message || `Wrong OCR card selected. Recommended Card: ${result.recommendedCard || 'SF'}. (No penalty applied)`
+        });
+        setRejectionError(result.rejectionReason || result.message || `Screenshot structure matches a different mode. Please switch to the recommended OCR card.`);
+        showToast(result.message || 'Mode mismatch: No penalty applied', 'info');
+        return;
+      }
 
       if (!result.valid) {
         setIsScanning(false);
@@ -275,25 +330,84 @@ export const SubmitSitrepView: React.FC = () => {
       }
     } catch (err: any) {
       console.error('[OCR Failure]', err);
-      // Fallback
       setOcrStatus('OCR completed via local verification engine.');
     } finally {
       setIsScanning(false);
     }
   };
 
-  const handleTestMismatchRejection = () => {
+  // Quick test: simulate an operative uploading someone else's scoreboard
+  const handleTestFraudAttempt = async () => {
     setIsScanning(true);
     setRejectionError(null);
-    setOcrStatus(`Testing rejection: Uploading mismatched screen to ${activeMode} card...`);
+    setFraudPenaltyAlert(null);
+    setModeMismatchAlert(null);
+    setOcrStatus('Simulating submission with mismatched operative IGN...');
+
+    try {
+      const result = await api.scanSitrepOcr({
+        image: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800&auto=format&fit=crop',
+        mode: activeMode,
+        playerIgn: 'DIFFERENT_PLAYER_IGN_999',
+        xnId: currentPlayer?.xnId
+      });
+
+      setIsScanning(false);
+      setOcrStatus(null);
+      const penaltyMsg = result.message || 'Fraud attempt penalty, 20xp';
+      setFraudPenaltyAlert({
+        detected: true,
+        penaltyXp: 20,
+        highlightedIgn: result.highlightedIgn || 'ARC EBŰZZY',
+        expectedIgn: 'DIFFERENT_PLAYER_IGN_999',
+        message: penaltyMsg
+      });
+      setRejectionError(result.rejectionReason || 'Fraud attempt penalty, 20xp: The yellow-highlighted player in the screenshot does not match your registered IGN.');
+      showToast('Fraud attempt penalty, 20xp', 'error');
+      await refreshPlayers();
+    } catch {
+      setIsScanning(false);
+      setOcrStatus(null);
+      setFraudPenaltyAlert({
+        detected: true,
+        penaltyXp: 20,
+        highlightedIgn: 'UNKNOWN_IMPOSTER',
+        expectedIgn: currentPlayer?.ign || 'OPERATIVE',
+        message: 'Fraud attempt penalty, 20xp'
+      });
+      setRejectionError('Fraud attempt penalty, 20xp: The yellow-highlighted player in the screenshot does not match your operative IGN. 20 XP has been deducted.');
+      showToast('Fraud attempt penalty, 20xp', 'error');
+    }
+  };
+
+  // Quick test: simulate uploading SF scoreboard to BR card
+  const handleTestCardMismatch = () => {
+    setIsScanning(true);
+    setRejectionError(null);
+    setFraudPenaltyAlert(null);
+    setModeMismatchAlert(null);
+    setOcrStatus(`Testing wrong card rejection: Uploading SF screenshot to ${activeMode} card...`);
 
     setTimeout(() => {
       setIsScanning(false);
       setOcrStatus(null);
-      const expectedDoc = activeMode === 'BR' ? 'BR.jpg' : activeMode === 'SF' ? 'SF.jpg' : '1v1.jpg / 2v2.jpg';
-      setRejectionError(`[REJECTION TEST PASSED]: Screenshot structure does not match ${activeMode}. Expected valid scoreboard in ${expectedDoc} structure with yellow player highlight.`);
-      showToast('Validation Guard Active: Invalid format rejected', 'error');
-    }, 900);
+      const targetRecommend: SitrepMode = activeMode === 'BR' ? 'SF' : 'BR';
+      const cardName = targetRecommend === 'SF' ? 'SF (Squad Fight)' : 'BR (Battle Royale)';
+      setModeMismatchAlert({
+        recommendedMode: targetRecommend,
+        recommendedCard: cardName,
+        message: `Wrong OCR card selected. Recommended Card: ${cardName}. (No penalty applied)`
+      });
+      setRejectionError(`Wrong OCR card selected: Screenshot structure detected as ${cardName}. Please upload this screenshot in the ${cardName} OCR Card.`);
+      showToast(`Mode Mismatch: Please use ${cardName} card (0 XP penalty)`, 'info');
+    }, 600);
+  };
+
+  const handleApplyCardRecommendation = (recMode: SitrepMode) => {
+    handleModeSelect(recMode);
+    setRejectionError(null);
+    setModeMismatchAlert(null);
+    showToast(`Switched to ${recMode} OCR Card`, 'success');
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -633,8 +747,74 @@ export const SubmitSitrepView: React.FC = () => {
             )}
           </div>
 
-          {/* OCR Rejection Alert Banner */}
-          {rejectionError && (
+          {/* Fraud Attempt Penalty Banner */}
+          {fraudPenaltyAlert && (
+            <div className="p-4 bg-red-950/70 border-2 border-red-500 rounded-xl text-xs font-mono text-red-200 flex items-start gap-3 shadow-lg shadow-red-950/50 animate-pulse">
+              <ShieldAlert className="w-6 h-6 text-red-400 shrink-0 mt-0.5" />
+              <div className="space-y-1.5 flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-sm uppercase tracking-wider text-red-300 flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+                    Fraud attempt penalty, 20xp
+                  </span>
+                  <span className="bg-red-500/20 text-red-300 font-bold px-2 py-0.5 rounded text-[10px] border border-red-500/40">
+                    -20 XP DEDUCTION
+                  </span>
+                </div>
+                <p className="text-red-200 leading-relaxed text-xs">
+                  {rejectionError || fraudPenaltyAlert.message}
+                </p>
+                <div className="p-2.5 bg-black/40 rounded border border-red-500/30 text-[11px] space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Highlighted Player on Screen:</span>
+                    <b className="text-red-300">{fraudPenaltyAlert.highlightedIgn || 'Unknown'}</b>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Your Registered Operative IGN:</span>
+                    <b className="text-cyan-300">{fraudPenaltyAlert.expectedIgn || currentPlayer?.ign || 'Unknown'}</b>
+                  </div>
+                </div>
+                <p className="text-[11px] text-red-400">
+                  Operative IGNs must match the yellow-highlighted row in the scoreboard.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Mode Mismatch Card Recommendation Banner (No Penalty) */}
+          {modeMismatchAlert && (
+            <div className="p-4 bg-amber-950/50 border border-amber-500/60 rounded-xl text-xs font-mono text-amber-200 flex items-start gap-3 shadow-md">
+              <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-2 flex-1">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold uppercase tracking-wider text-amber-300">
+                    Wrong OCR Card Selected (No Penalty)
+                  </span>
+                  <span className="bg-amber-500/20 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded border border-amber-500/30">
+                    0 XP Penalty
+                  </span>
+                </div>
+                <p className="text-amber-200 leading-relaxed text-xs">
+                  {modeMismatchAlert.message}
+                </p>
+                <div className="pt-1 flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleApplyCardRecommendation(modeMismatchAlert.recommendedMode)}
+                    className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-display font-black text-xs uppercase rounded transition-colors cursor-pointer flex items-center gap-1.5 shadow"
+                  >
+                    <Check className="w-3.5 h-3.5" /> Switch to {modeMismatchAlert.recommendedCard} Card
+                  </button>
+                  <span className="text-[11px] text-slate-400">
+                    Re-scans automatically under correct mode schema.
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* General OCR Rejection Alert Banner (when not fraud or mode mismatch) */}
+          {rejectionError && !fraudPenaltyAlert && !modeMismatchAlert && (
             <div className="p-4 bg-red-950/40 border border-red-500/50 rounded-xl text-xs font-mono text-red-300 flex items-start gap-3">
               <ShieldAlert className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
               <div className="space-y-1">
@@ -672,19 +852,28 @@ export const SubmitSitrepView: React.FC = () => {
             </div>
           )}
 
-          {/* Quick Preset Samples for Selected Mode */}
+          {/* Quick Preset Samples & Rule Guards */}
           <div className="space-y-2 pt-2">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-mono text-[11px] text-slate-400 uppercase block">
-                Quick Test Benchmarks for {activeMode}:
+                Quick Telemetry Benchmarks for {activeMode}:
               </span>
-              <button
-                type="button"
-                onClick={handleTestMismatchRejection}
-                className="text-[10px] font-mono text-red-400 hover:text-red-300 underline cursor-pointer"
-              >
-                Test Invalid Screenshot Rejection
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTestFraudAttempt}
+                  className="px-2.5 py-1 rounded bg-red-950/50 border border-red-500/40 text-[10px] font-mono text-red-300 hover:text-red-200 hover:bg-red-900/60 transition-colors cursor-pointer"
+                >
+                  ⚡ Test Fraud Attempt (-20 XP)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTestCardMismatch}
+                  className="px-2.5 py-1 rounded bg-amber-950/50 border border-amber-500/40 text-[10px] font-mono text-amber-300 hover:text-amber-200 hover:bg-amber-900/60 transition-colors cursor-pointer"
+                >
+                  ⚡ Test Wrong OCR Card (0 XP)
+                </button>
+              </div>
             </div>
             
             <div className="flex flex-wrap gap-2">
@@ -694,6 +883,8 @@ export const SubmitSitrepView: React.FC = () => {
                   key={idx}
                   onClick={() => {
                     setRejectionError(null);
+                    setFraudPenaltyAlert(null);
+                    setModeMismatchAlert(null);
                     setEvidencePreview(sample.url);
                     setStats({
                       ...sample.stats,

@@ -197,10 +197,20 @@ export const api = {
   async scanSitrepOcr(data: {
     image: string;
     mode: 'BR' | 'SF' | 'CUSTOM';
+    playerIgn?: string;
+    xnId?: string;
   }): Promise<{
     success: boolean;
     valid: boolean;
+    fraudDetected?: boolean;
+    penaltyApplied?: boolean;
+    penaltyXp?: number;
+    highlightedIgn?: string;
+    expectedIgn?: string;
+    rejectionType?: 'NONE' | 'MODE_MISMATCH' | 'NOT_A_SCOREBOARD' | 'OTHER';
     rejectionReason?: string;
+    recommendedMode?: 'BR' | 'SF' | 'CUSTOM';
+    recommendedCard?: string;
     mode: 'BR' | 'SF' | 'CUSTOM';
     extracted?: {
       highlightedIgn: string;
@@ -216,6 +226,7 @@ export const api = {
     };
     scoreBreakdown?: any;
     message?: string;
+    player?: Player;
   }> {
     const res = await fetch('/api/ocr/scan-sitrep', {
       method: 'POST',
