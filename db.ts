@@ -119,5 +119,17 @@ export async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       is_active BOOLEAN NOT NULL DEFAULT true
     );
+
+    -- The app currently persists its whole state as one JSON blob
+    -- here (see loadDatabase/saveDatabase in server.ts) rather than
+    -- using the fully-normalized tables above. This was the fastest
+    -- safe path to real persistence without rewriting ~40 route
+    -- handlers' worth of business logic. The normalized tables are
+    -- left in place for a future proper migration.
+    CREATE TABLE IF NOT EXISTS app_state (
+      id TEXT PRIMARY KEY DEFAULT 'main',
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   `);
 }

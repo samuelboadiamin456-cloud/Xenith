@@ -9,7 +9,9 @@ import {
   SubmissionStats, 
   AdminStats,
   AdminUser,
-  AdminRequest
+  AdminRequest,
+  AppNotification,
+  AcademyEvent
 } from '../types';
 import { INITIAL_PLAYERS, INITIAL_SUBMISSIONS, INITIAL_AUDIT_LOGS } from '../data/initialData';
 import { calculateRank, calculateSubmissionScore, RANK_CONFIGS } from '../data/rankConfigs';
@@ -96,6 +98,68 @@ interface AppContextType {
   
   // Toast
   showToast: (text: string, type?: 'success' | 'error' | 'info') => void;
+
+  // Academy Operations: roster, notifications, events
+  notifications: AppNotification[];
+  events: AcademyEvent[];
+  deviceNotificationPermission: NotificationPermission | 'unsupported';
+  requestDeviceNotificationPermission: () => Promise<void>;
+  refreshPlayers: () => Promise<void>;
+  refreshEvents: () => Promise<void>;
+  refreshNotifications: () => Promise<void>;
+  addPlayerToAcademy: (playerData: {
+    displayName: string;
+    ign: string;
+    role: Player['role'];
+    email?: string;
+    username?: string;
+    country?: string;
+    bio?: string;
+    avatarUrl?: string;
+    initialXp?: number;
+    academyStatus?: Player['academyStatus'];
+    verificationStatus?: Player['verificationStatus'];
+    lifetimeStats?: Partial<Player['lifetimeStats']>;
+  }) => Promise<void>;
+  removePlayerFromAcademy: (xnId: string, reason: string) => Promise<void>;
+  calibratePlayerTelemetry: (xnId: string, data: {
+    kills?: number;
+    wins?: number;
+    matches?: number;
+    kd?: number;
+    winRate?: number;
+    reportTicket?: string;
+    reason?: string;
+    recalculateXp?: boolean;
+  }) => Promise<void>;
+  sendNotification: (payload: {
+    recipientXnId?: string;
+    title: string;
+    message: string;
+    type?: AppNotification['type'];
+    priority?: AppNotification['priority'];
+    linkView?: string;
+  }) => Promise<void>;
+  createEvent: (eventData: {
+    title: string;
+    eventType: AcademyEvent['eventType'];
+    description: string;
+    rewardXp: number;
+    scheduledDate: string;
+    targetRank?: string;
+    targetRole?: string;
+    broadcastPush?: boolean;
+  }) => Promise<void>;
+  deleteEvent: (id: string) => Promise<void>;
+
+  // Notification bell/modal
+  unreadNotificationsCount: number;
+  notificationModalOpen: boolean;
+  openNotificationModal: () => void;
+  closeNotificationModal: () => void;
+  markNotificationAsRead: (id: string) => Promise<void>;
+  markAllNotificationsAsRead: () => Promise<void>;
+  deleteNotification: (id: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -163,6 +227,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
     return localStorage.getItem(STORAGE_KEY_ADMIN) === 'true';
   });
+
+  // Academy Operations: notifications & events (fetched from the
+  // server — previously these were destructured from context by
+  // AcademyOperationsView but never actually defined here, which
+  // made them `undefined` and crashed the view on `.length` access.
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [events, setEvents] = useState<AcademyEvent[]>([]);
+  const [deviceNotificationPermission, setDeviceNotificationPermission] = useState<NotificationPermission | 'unsupported'>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
+  );
+  const [notificationModalOpen, setNotificationModalOpen] = useState(false);
 
   const [adminRequests, setAdminRequests] = useState<AdminRequest[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_ADMIN_REQUESTS);
@@ -293,12 +368,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let isMounted = true;
     const fetchBackendData = async () => {
       try {
-        const [serverPlayers, serverSubs, serverLogs, status, requests] = await Promise.all([
+        const [serverPlayers, serverSubs, serverLogs, status, requests, serverNotifs, serverEvents] = await Promise.all([
           api.getPlayers(),
           api.getSubmissions(),
           api.getAuditLogs(),
           api.getAdminStatus(),
-          api.getAdminRequests()
+          api.getAdminRequests(),
+          api.getNotifications(),
+          api.getEvents()
         ]);
 
         if (isMounted) {
@@ -317,6 +394,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (requests) {
             setAdminRequests(requests);
           }
+          setNotifications(serverNotifs || []);
+          setEvents(serverEvents || []);
         }
       } catch (err) {
         console.warn('[XN Protocol] Backend API sync note:', err);
@@ -828,15 +907,157 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast(`Submission ${submissionId} Rejected`, 'error');
   };
 
-  // Compute admin stats
+  // Compute admin stats — guarded against any record missing nested
+  // fields, which previously crashed this computation (and the whole
+  // app, since it runs on every render) with "Cannot read properties
+  // of undefined".
   const adminStats: AdminStats = {
     totalPlayers: players.length,
-    activePlayers: players.filter(p => p.lifetimeStats.matches > 0).length,
+    activePlayers: players.filter(p => (p.lifetimeStats?.matches ?? 0) > 0).length,
     pendingSubmissions: submissions.filter(s => s.status === 'pending').length,
     flaggedSubmissions: submissions.filter(s => s.status === 'flagged').length,
     approvedSubmissions: submissions.filter(s => s.status === 'approved').length,
     rejectedSubmissions: submissions.filter(s => s.status === 'rejected').length,
-    totalXpAwarded: submissions.filter(s => s.status === 'approved').reduce((acc, s) => acc + s.scoreBreakdown.total, 0)
+    totalXpAwarded: submissions.filter(s => s.status === 'approved').reduce((acc, s) => acc + (s.scoreBreakdown?.total ?? 0), 0)
+  };
+
+  // --- Academy Operations handlers ---
+  const refreshPlayers = async () => {
+    try {
+      const list = await api.getPlayers();
+      if (list) setPlayers(list);
+    } catch (err) {
+      console.warn('[XN Protocol] refreshPlayers failed:', err);
+    }
+  };
+
+  const refreshEvents = async () => {
+    try {
+      setEvents(await api.getEvents());
+    } catch (err) {
+      console.warn('[XN Protocol] refreshEvents failed:', err);
+    }
+  };
+
+  const refreshNotifications = async () => {
+    try {
+      setNotifications(await api.getNotifications());
+    } catch (err) {
+      console.warn('[XN Protocol] refreshNotifications failed:', err);
+    }
+  };
+
+  const requestDeviceNotificationPermission = async () => {
+    if (typeof Notification === 'undefined') {
+      setDeviceNotificationPermission('unsupported');
+      return;
+    }
+    try {
+      const perm = await Notification.requestPermission();
+      setDeviceNotificationPermission(perm);
+    } catch {
+      setDeviceNotificationPermission('denied');
+    }
+  };
+
+  const addPlayerToAcademy: AppContextType['addPlayerToAcademy'] = async (playerData) => {
+    try {
+      const result = await api.addPlayerToAcademy({ ...playerData, adminUsername: currentAdmin?.username });
+      setPlayers(prev => [...prev, result.player]);
+      if (result.auditLog) setAuditLogs(prev => [result.auditLog as AuditLog, ...prev]);
+      showToast(`${result.player.displayName} added to the academy roster`, 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to add operative to academy', 'error');
+      throw err;
+    }
+  };
+
+  const removePlayerFromAcademy = async (xnId: string, reason: string) => {
+    try {
+      const result = await api.removePlayerFromAcademy(xnId, reason, currentAdmin?.username);
+      setPlayers(prev => prev.filter(p => p.xnId !== xnId));
+      showToast(result.message || 'Operative removed from academy', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to remove operative', 'error');
+      throw err;
+    }
+  };
+
+  const calibratePlayerTelemetry: AppContextType['calibratePlayerTelemetry'] = async (xnId, data) => {
+    try {
+      const result = await api.calibratePlayerTelemetry(xnId, { ...data, adminUsername: currentAdmin?.username });
+      setPlayers(prev => prev.map(p => (p.xnId === xnId ? result.player : p)));
+      if (result.notification) setNotifications(prev => [result.notification as AppNotification, ...prev]);
+      showToast(result.message || 'Telemetry calibrated', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to calibrate telemetry', 'error');
+      throw err;
+    }
+  };
+
+  const sendNotification: AppContextType['sendNotification'] = async (payload) => {
+    try {
+      const result = await api.sendNotification({ ...payload, sender: currentAdmin?.displayName });
+      setNotifications(prev => [result.notification, ...prev]);
+      showToast('Notification dispatched', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to dispatch notification', 'error');
+      throw err;
+    }
+  };
+
+  const createEvent: AppContextType['createEvent'] = async (eventData) => {
+    try {
+      const result = await api.createEvent({ ...eventData, createdBy: currentAdmin?.displayName });
+      setEvents(prev => [result.event, ...prev]);
+      showToast('Academy event published', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to publish event', 'error');
+      throw err;
+    }
+  };
+
+  const deleteEvent = async (id: string) => {
+    try {
+      const ok = await api.deleteEvent(id, currentAdmin?.username);
+      if (ok) {
+        setEvents(prev => prev.filter(e => e.id !== id));
+        showToast('Event removed', 'info');
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Failed to remove event', 'error');
+    }
+  };
+
+  const unreadNotificationsCount = notifications.filter(n => !n.read).length;
+  const openNotificationModal = () => setNotificationModalOpen(true);
+  const closeNotificationModal = () => setNotificationModalOpen(false);
+
+  const markNotificationAsRead = async (id: string) => {
+    setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
+    try {
+      await api.markNotificationAsRead(id);
+    } catch (err) {
+      console.warn('[XN Protocol] markNotificationAsRead failed:', err);
+    }
+  };
+
+  const markAllNotificationsAsRead = async () => {
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    try {
+      await api.markAllNotificationsAsRead(currentPlayer?.xnId);
+    } catch (err) {
+      console.warn('[XN Protocol] markAllNotificationsAsRead failed:', err);
+    }
+  };
+
+  const deleteNotification = async (id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+    try {
+      await api.deleteNotification(id);
+    } catch (err) {
+      console.warn('[XN Protocol] deleteNotification failed:', err);
+    }
   };
 
   return (
@@ -886,7 +1107,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rejectSubmission,
         triggerRankCelebration,
         closeCelebration,
-        showToast
+        showToast,
+        notifications,
+        events,
+        deviceNotificationPermission,
+        requestDeviceNotificationPermission,
+        refreshPlayers,
+        refreshEvents,
+        refreshNotifications,
+        addPlayerToAcademy,
+        removePlayerFromAcademy,
+        calibratePlayerTelemetry,
+        sendNotification,
+        createEvent,
+        deleteEvent,
+        unreadNotificationsCount,
+        notificationModalOpen,
+        openNotificationModal,
+        closeNotificationModal,
+        markNotificationAsRead,
+        markAllNotificationsAsRead,
+        deleteNotification
       }}
     >
       {children}

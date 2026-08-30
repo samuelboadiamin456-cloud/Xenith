@@ -1,8 +1,11 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import { pool, initSchema } from './db.js';
 
 // Interfaces matching frontend types
 export type RankTier = 'E' | 'D' | 'C' | 'B' | 'A' | 'S' | 'S-MAX';
@@ -171,7 +174,7 @@ let dbNotifications: AppNotification[] = [];
 let dbEvents: AcademyEvent[] = [];
 
 // Load Database from disk on startup
-function loadDatabase() {
+function loadDatabaseFromFile() {
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
@@ -210,29 +213,30 @@ function loadDatabase() {
         dbEvents = [];
       }
 
-      console.log(`[Storage] Database loaded from disk: ${dbPlayers.length} live players, ${dbAdmins.length} admins, ${dbNotifications.length} notifications.`);
+      console.log(`[Storage] Database loaded from local file: ${dbPlayers.length} live players, ${dbAdmins.length} admins, ${dbNotifications.length} notifications.`);
     } else {
       dbPlayers = [];
       dbSubmissions = [];
       dbAuditLogs = [];
       dbNotifications = [];
       dbEvents = [];
-      saveDatabase();
+      saveDatabaseToFile();
       console.log(`[Storage] Clean empty database created and saved to ${DB_FILE}`);
     }
   } catch (err) {
-    console.error('[Storage] Error loading database from disk:', err);
+    console.error('[Storage] Error loading database from local file:', err);
     dbPlayers = [];
     dbSubmissions = [];
     dbAuditLogs = [];
     dbNotifications = [];
     dbEvents = [];
-    saveDatabase();
+    saveDatabaseToFile();
   }
 }
 
-// Save Database to disk safely
-function saveDatabase() {
+// Save Database to local disk (fallback path, and used when no
+// DATABASE_URL is configured — e.g. local development)
+function saveDatabaseToFile() {
   try {
     const data = {
       players: dbPlayers,
@@ -246,12 +250,113 @@ function saveDatabase() {
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
-    console.error('[Storage] Error saving database to disk:', err);
+    console.error('[Storage] Error saving database to local file:', err);
   }
 }
 
-// Initialize persistence on module load
-loadDatabase();
+// Real persistence: the entire app state is synced as one JSON blob
+// into a single Postgres row. This is a deliberately minimal change
+// (versus fully normalizing 7 tables' worth of business logic across
+// 40 routes) that fixes the actual problem — Render's free web
+// services have no persistent disk, so the local-file fallback above
+// gets wiped on every redeploy. Postgres (Neon) survives redeploys.
+async function loadDatabase() {
+  if (pool) {
+    try {
+      const { rows } = await pool.query("SELECT data FROM app_state WHERE id = 'main'");
+      if (rows.length) {
+        const data = rows[0].data;
+        dbPlayers = Array.isArray(data.players) ? data.players : [];
+        dbSubmissions = Array.isArray(data.submissions) ? data.submissions : [];
+        dbAuditLogs = Array.isArray(data.auditLogs) ? data.auditLogs : [];
+        dbAdmins = Array.isArray(data.admins) ? data.admins : [];
+        dbAdminRequests = Array.isArray(data.adminRequests) ? data.adminRequests : [];
+        dbNotifications = Array.isArray(data.notifications) ? data.notifications : [];
+        dbEvents = Array.isArray(data.events) ? data.events : [];
+        console.log(`[Storage] Loaded from Postgres: ${dbPlayers.length} players, ${dbAdmins.length} admins, ${dbSubmissions.length} submissions.`);
+      } else {
+        console.log('[Storage] No existing Postgres state row found — starting fresh and creating one.');
+        await saveDatabase();
+      }
+      return;
+    } catch (err) {
+      console.error('[Storage] Postgres load failed, falling back to local file:', err);
+    }
+  } else {
+    console.log('[Storage] DATABASE_URL not set — using local file storage (will NOT survive redeploys on Render).');
+  }
+  loadDatabaseFromFile();
+}
+
+async function saveDatabase() {
+  const data = {
+    players: dbPlayers,
+    submissions: dbSubmissions,
+    auditLogs: dbAuditLogs,
+    admins: dbAdmins,
+    adminRequests: dbAdminRequests,
+    notifications: dbNotifications,
+    events: dbEvents,
+    lastSaved: new Date().toISOString()
+  };
+  if (pool) {
+    try {
+      await pool.query(
+        `INSERT INTO app_state (id, data, updated_at) VALUES ('main', $1, now())
+         ON CONFLICT (id) DO UPDATE SET data = $1, updated_at = now()`,
+        [JSON.stringify(data)]
+      );
+      return;
+    } catch (err) {
+      console.error('[Storage] Postgres save failed, falling back to local file:', err);
+    }
+  }
+  saveDatabaseToFile();
+}
+
+// ---- admin auth (JWT) ----
+// Previously scaffolded (JWT_SECRET in .env.example) but never
+// actually implemented — every admin-mutating route was open to
+// anyone with no credentials at all, including a full data-wipe
+// endpoint. This closes that gap.
+const JWT_SECRET = process.env.JWT_SECRET || '';
+if (!JWT_SECRET) {
+  console.warn('[Security] JWT_SECRET is not set — admin routes will reject all requests until it is configured.');
+}
+const ADMIN_TOKEN_TTL = '12h';
+
+function signAdminToken(adminId: string): string {
+  return jwt.sign({ adminId }, JWT_SECRET || 'insecure-dev-fallback-do-not-use-in-production', { expiresIn: ADMIN_TOKEN_TTL });
+}
+
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'Missing admin session token. Please log in again.' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET || 'insecure-dev-fallback-do-not-use-in-production') as { adminId: string };
+    const admin = dbAdmins.find(a => a.id === decoded.adminId);
+    if (!admin) return res.status(401).json({ error: 'Admin session no longer valid. Please log in again.' });
+    (req as any).adminId = admin.id;
+    (req as any).admin = admin;
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Admin session is invalid or has expired. Please log in again.' });
+  }
+}
+
+function requireHeadOfCommand(req: Request, res: Response, next: NextFunction) {
+  requireAdmin(req, res, () => {
+    const admin = (req as any).admin as AdminUser | undefined;
+    if (!admin?.isHeadOfCommand) {
+      return res.status(403).json({ error: 'This action requires Head of Command authority.' });
+    }
+    next();
+  });
+}
+
+// Persistence and schema are initialized inside startServer() now,
+// awaited before the server starts accepting requests (see below).
 
 // Lazy initialized GenAI client
 let genAiClient: GoogleGenAI | null = null;
@@ -400,6 +505,9 @@ function calculateSubmissionScore(stats: SubmissionStats): ScoreBreakdown {
 }
 
 async function startServer() {
+  await initSchema();
+  await loadDatabase();
+
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
@@ -503,7 +611,7 @@ async function startServer() {
   });
 
   // Emergency / Administrative Data Purge
-  app.post('/api/admin/clear-all-data', (req: Request, res: Response) => {
+  app.post('/api/admin/clear-all-data', requireHeadOfCommand, (req: Request, res: Response) => {
     const { preserveAdmins = true } = req.body || {};
     dbPlayers = [];
     dbSubmissions = [];
@@ -591,51 +699,59 @@ async function startServer() {
     const nextNumber = maxNumber + 1;
     const formattedId = `XN-${nextNumber.toString().padStart(3, '0')}`;
 
-    const newPlayer: Player = {
-      id: `p-${Date.now()}`,
-      xnId: formattedId,
-      username: username.trim(),
-      email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
-      password: password ? String(password) : undefined,
-      displayName: displayName.trim(),
-      ign: ign.trim().toUpperCase(),
-      role,
-      country: country ? country.trim() : 'Global',
-      bio: bio ? bio.trim() : 'Verified recruit of the XN Academy competitive network.',
-      avatarUrl: avatarUrl || undefined,
-      currentRank: 'E',
-      peakRank: 'E',
-      totalXp: 50, // Welcome signup bonus
-      academyStatus: 'Cadet',
-      verificationStatus: 'Verified',
-      joinedAt: new Date().toISOString(),
-      lifetimeStats: {
-        kills: 0,
-        wins: 0,
-        matches: 0,
-        kd: 0.0,
-        winRate: 0.0, // Cumulative win rate
-        hs: 0.0
-      }
+    const finish = (passwordHash: string | undefined) => {
+      const newPlayer: Player = {
+        id: `p-${Date.now()}`,
+        xnId: formattedId,
+        username: username.trim(),
+        email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+        password: passwordHash,
+        displayName: displayName.trim(),
+        ign: ign.trim().toUpperCase(),
+        role,
+        country: country ? country.trim() : 'Global',
+        bio: bio ? bio.trim() : 'Verified recruit of the XN Academy competitive network.',
+        avatarUrl: avatarUrl || undefined,
+        currentRank: 'E',
+        peakRank: 'E',
+        totalXp: 50, // Welcome signup bonus
+        academyStatus: 'Cadet',
+        verificationStatus: 'Verified',
+        joinedAt: new Date().toISOString(),
+        lifetimeStats: {
+          kills: 0,
+          wins: 0,
+          matches: 0,
+          kd: 0.0,
+          winRate: 0.0, // Cumulative win rate
+          hs: 0.0
+        }
+      };
+
+      dbPlayers.unshift(newPlayer);
+      saveDatabase();
+
+      // Create system audit log
+      const log: AuditLog = {
+        id: `log-${Date.now()}`,
+        action: 'OPERATIVE_REGISTERED',
+        timestamp: new Date().toISOString(),
+        actorType: 'system',
+        details: `New account assigned official permanent identifier: ${formattedId} (${displayName})`
+      };
+      dbAuditLogs.unshift(log);
+      saveDatabase();
+
+      // Return player without leaking password
+      const { password: _, ...safePlayer } = newPlayer;
+      res.status(201).json({ player: safePlayer, auditLog: log });
     };
 
-    dbPlayers.unshift(newPlayer);
-    saveDatabase();
-
-    // Create system audit log
-    const log: AuditLog = {
-      id: `log-${Date.now()}`,
-      action: 'OPERATIVE_REGISTERED',
-      timestamp: new Date().toISOString(),
-      actorType: 'system',
-      details: `New account assigned official permanent identifier: ${formattedId} (${displayName})`
-    };
-    dbAuditLogs.unshift(log);
-    saveDatabase();
-
-    // Return player without leaking password
-    const { password: _, ...safePlayer } = newPlayer;
-    res.status(201).json({ player: safePlayer, auditLog: log });
+    if (password) {
+      bcrypt.hash(String(password), 10).then(finish).catch(() => res.status(500).json({ error: 'Registration failed' }));
+    } else {
+      finish(undefined);
+    }
   });
 
   // POST Login player
@@ -659,15 +775,25 @@ async function startServer() {
       return res.status(404).json({ error: 'Operative not found with provided identifier' });
     }
 
-    // If player registered with a password, enforce password match
-    if (player.password && password !== undefined) {
-      if (player.password !== String(password)) {
-        return res.status(401).json({ error: 'Invalid operative clearance password' });
+    const checkPassword = async () => {
+      if (!player.password || password === undefined) return true;
+      const looksHashed = player.password.startsWith('$2a$') || player.password.startsWith('$2b$');
+      const ok = looksHashed
+        ? await bcrypt.compare(String(password), player.password)
+        : player.password === String(password);
+      if (!ok) return false;
+      if (!looksHashed) {
+        player.password = await bcrypt.hash(String(password), 10);
+        saveDatabase();
       }
-    }
+      return true;
+    };
 
-    const { password: _, ...safePlayer } = player;
-    res.json({ player: safePlayer, message: 'Authentication successful' });
+    checkPassword().then((ok) => {
+      if (!ok) return res.status(401).json({ error: 'Invalid operative clearance password' });
+      const { password: _, ...safePlayer } = player;
+      res.json({ player: safePlayer, message: 'Authentication successful' });
+    }).catch(() => res.status(500).json({ error: 'Authentication failed' }));
   });
 
   // PUT update player profile (Partial Merge to prevent overwriting existing data)
@@ -991,7 +1117,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST approve submission (Updates cumulative win rate & rank thresholds)
-  app.post('/api/submissions/:id/approve', (req: Request, res: Response) => {
+  app.post('/api/submissions/:id/approve', requireAdmin, (req: Request, res: Response) => {
     const { id } = req.params;
     const subIndex = dbSubmissions.findIndex(s => s.id === id);
 
@@ -1064,7 +1190,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST flag submission
-  app.post('/api/submissions/:id/flag', (req: Request, res: Response) => {
+  app.post('/api/submissions/:id/flag', requireAdmin, (req: Request, res: Response) => {
     const { id } = req.params;
     const subIndex = dbSubmissions.findIndex(s => s.id === id);
 
@@ -1092,7 +1218,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST reject submission
-  app.post('/api/submissions/:id/reject', (req: Request, res: Response) => {
+  app.post('/api/submissions/:id/reject', requireAdmin, (req: Request, res: Response) => {
     const { id } = req.params;
     const { reason, reviewedBy } = req.body;
     const subIndex = dbSubmissions.findIndex(s => s.id === id);
@@ -1175,36 +1301,40 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       return res.status(400).json({ error: 'Username, display name, and password are required' });
     }
 
-    const firstAdmin: AdminUser = {
-      id: `admin-${Date.now()}`,
-      username: username.trim(),
-      email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
-      displayName: displayName.trim(),
-      password: String(password),
-      role: 'HEAD_OF_COMMAND',
-      isHeadOfCommand: true,
-      linkedXnId: linkedXnId || undefined,
-      createdAt: new Date().toISOString()
-    };
+    bcrypt.hash(String(password), 10).then((passwordHash) => {
+      const firstAdmin: AdminUser = {
+        id: `admin-${Date.now()}`,
+        username: username.trim(),
+        email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
+        displayName: displayName.trim(),
+        password: passwordHash,
+        role: 'HEAD_OF_COMMAND',
+        isHeadOfCommand: true,
+        linkedXnId: linkedXnId || undefined,
+        createdAt: new Date().toISOString()
+      };
 
-    dbAdmins.push(firstAdmin);
+      dbAdmins.push(firstAdmin);
 
-    const log: AuditLog = {
-      id: `log-${Date.now()}`,
-      action: 'HEAD_OF_COMMAND_PROVISIONED',
-      timestamp: new Date().toISOString(),
-      actorType: 'hoc',
-      details: `Supreme Head of Command authority assigned to ${displayName} (@${username}). Direct admin registration locked.`
-    };
-    dbAuditLogs.unshift(log);
-    saveDatabase();
+      const log: AuditLog = {
+        id: `log-${Date.now()}`,
+        action: 'HEAD_OF_COMMAND_PROVISIONED',
+        timestamp: new Date().toISOString(),
+        actorType: 'hoc',
+        details: `Supreme Head of Command authority assigned to ${displayName} (@${username}). Direct admin registration locked.`
+      };
+      dbAuditLogs.unshift(log);
+      saveDatabase();
 
-    const { password: _, ...safeAdmin } = firstAdmin;
-    res.status(201).json({
-      message: 'Head of Command profile initialized successfully.',
-      admin: safeAdmin,
-      auditLog: log
-    });
+      const token = signAdminToken(firstAdmin.id);
+      const { password: _, ...safeAdmin } = firstAdmin;
+      res.status(201).json({
+        message: 'Head of Command profile initialized successfully.',
+        admin: safeAdmin,
+        token,
+        auditLog: log
+      });
+    }).catch(() => res.status(500).json({ error: 'Failed to initialize Head of Command account' }));
   });
 
   // POST Request Admin Access
@@ -1230,34 +1360,37 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       username: username.trim(),
       email: email ? email.trim() : `${username.trim()}@xn-academy.gg`,
       displayName: displayName.trim(),
-      password: String(password),
+      password: '',
       reason: reason ? reason.trim() : 'Competitive staff supervisor & telemetry audit officer application.',
       status: 'pending',
       requestedAt: new Date().toISOString()
     };
 
-    dbAdminRequests.unshift(newRequest);
+    bcrypt.hash(String(password), 10).then((passwordHash) => {
+      newRequest.password = passwordHash;
+      dbAdminRequests.unshift(newRequest);
 
-    const log: AuditLog = {
-      id: `log-${Date.now()}`,
-      action: 'ADMIN_CLEARANCE_REQUESTED',
-      timestamp: new Date().toISOString(),
-      actorType: 'system',
-      details: `Staff clearance application submitted by ${displayName} (@${username}). Pending Head of Command review.`
-    };
-    dbAuditLogs.unshift(log);
-    saveDatabase();
+      const log: AuditLog = {
+        id: `log-${Date.now()}`,
+        action: 'ADMIN_CLEARANCE_REQUESTED',
+        timestamp: new Date().toISOString(),
+        actorType: 'system',
+        details: `Staff clearance application submitted by ${displayName} (@${username}). Pending Head of Command review.`
+      };
+      dbAuditLogs.unshift(log);
+      saveDatabase();
 
-    res.status(201).json({
-      message: 'Clearance application submitted. Awaiting Head of Command approval.',
-      request: {
-        id: newRequest.id,
-        username: newRequest.username,
-        displayName: newRequest.displayName,
-        status: newRequest.status,
-        requestedAt: newRequest.requestedAt
-      }
-    });
+      res.status(201).json({
+        message: 'Clearance application submitted. Awaiting Head of Command approval.',
+        request: {
+          id: newRequest.id,
+          username: newRequest.username,
+          displayName: newRequest.displayName,
+          status: newRequest.status,
+          requestedAt: newRequest.requestedAt
+        }
+      });
+    }).catch(() => res.status(500).json({ error: 'Failed to submit clearance request' }));
   });
 
   // POST Admin Login
@@ -1290,15 +1423,35 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
       return res.status(404).json({ error: 'No authorized staff account found with provided credentials' });
     }
 
-    if (admin.password && admin.password !== String(password)) {
-      return res.status(401).json({ error: 'Invalid security clearance passkey' });
-    }
+    const checkPassword = async () => {
+      if (admin.password) {
+        // Existing accounts created before this fix may still have a
+        // plaintext password on file; verify with bcrypt if it looks
+        // like a bcrypt hash, otherwise fall back to a one-time plain
+        // comparison and transparently upgrade it to a real hash.
+        const looksHashed = admin.password.startsWith('$2a$') || admin.password.startsWith('$2b$');
+        const ok = looksHashed
+          ? await bcrypt.compare(String(password), admin.password)
+          : admin.password === String(password);
+        if (!ok) return false;
+        if (!looksHashed) {
+          admin.password = await bcrypt.hash(String(password), 10);
+          saveDatabase();
+        }
+      }
+      return true;
+    };
 
-    const { password: _, ...safeAdmin } = admin;
-    res.json({
-      admin: safeAdmin,
-      message: `${admin.isHeadOfCommand ? 'Head of Command' : 'Staff Officer'} clearance validated.`
-    });
+    checkPassword().then((ok) => {
+      if (!ok) return res.status(401).json({ error: 'Invalid security clearance passkey' });
+      const token = signAdminToken(admin.id);
+      const { password: _, ...safeAdmin } = admin;
+      res.json({
+        admin: safeAdmin,
+        token,
+        message: `${admin.isHeadOfCommand ? 'Head of Command' : 'Staff Officer'} clearance validated.`
+      });
+    }).catch(() => res.status(500).json({ error: 'Authentication failed' }));
   });
 
   // GET all admin clearance requests
@@ -1308,7 +1461,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST approve admin clearance request (HoC or staff)
-  app.post('/api/admin/requests/:id/approve', (req: Request, res: Response) => {
+  app.post('/api/admin/requests/:id/approve', requireAdmin, (req: Request, res: Response) => {
     const { id } = req.params;
     const reqIndex = dbAdminRequests.findIndex(r => r.id === id);
 
@@ -1362,7 +1515,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST reject admin clearance request
-  app.post('/api/admin/requests/:id/reject', (req: Request, res: Response) => {
+  app.post('/api/admin/requests/:id/reject', requireAdmin, (req: Request, res: Response) => {
     const { id } = req.params;
     const reqIndex = dbAdminRequests.findIndex(r => r.id === id);
 
@@ -1389,7 +1542,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // GET list of all admins
-  app.get('/api/admin/list', (req: Request, res: Response) => {
+  app.get('/api/admin/list', requireAdmin, (req: Request, res: Response) => {
     const safeAdmins = dbAdmins.map(({ password: _, ...a }) => a);
     res.json({ admins: safeAdmins });
   });
@@ -1400,7 +1553,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   // =========================================================================
 
   // POST HoC: Reset ALL ranks across the network
-  app.post('/api/admin/hoc/reset-all-ranks', (req: Request, res: Response) => {
+  app.post('/api/admin/hoc/reset-all-ranks', requireHeadOfCommand, (req: Request, res: Response) => {
     const { hocUsername, reason } = req.body;
 
     // Verify caller has Head of Command authority
@@ -1434,7 +1587,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST HoC: Reset an individual player's rank
-  app.post('/api/admin/hoc/reset-player-rank', (req: Request, res: Response) => {
+  app.post('/api/admin/hoc/reset-player-rank', requireHeadOfCommand, (req: Request, res: Response) => {
     const { xnId, hocUsername, reason } = req.body;
 
     if (!xnId) {
@@ -1474,7 +1627,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST HoC: Deduct XP from an operative
-  app.post('/api/admin/hoc/deduct-xp', (req: Request, res: Response) => {
+  app.post('/api/admin/hoc/deduct-xp', requireHeadOfCommand, (req: Request, res: Response) => {
     const { xnId, amount, hocUsername, reason } = req.body;
 
     if (!xnId) {
@@ -1522,7 +1675,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   // Admin can give out 50xp to any player as a reward ONLY when he crosses A rank (XP >= 5000 / Rank >= A).
   // Head of Command can reward at any time.
   // =========================================================================
-  app.post('/api/admin/reward-player', (req: Request, res: Response) => {
+  app.post('/api/admin/reward-player', requireAdmin, (req: Request, res: Response) => {
     const { xnId, adminUsername, amount, reason } = req.body;
 
     if (!xnId) {
@@ -1596,7 +1749,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // --- ACADEMY OPERATIONS: ADD PLAYER TO SYSTEM ---
-  app.post('/api/admin/players/add', (req: Request, res: Response) => {
+  app.post('/api/admin/players/add', requireAdmin, (req: Request, res: Response) => {
     const {
       displayName,
       ign,
@@ -1700,7 +1853,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // --- ACADEMY OPERATIONS: REMOVE PLAYER FROM SYSTEM ---
-  app.delete('/api/admin/players/:xnId', (req: Request, res: Response) => {
+  app.delete('/api/admin/players/:xnId', requireAdmin, (req: Request, res: Response) => {
     const { xnId } = req.params;
     const { reason, adminUsername } = req.body;
 
@@ -1730,7 +1883,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // --- LOCK & CALIBRATE TELEMETRY METRIC (BASED ON PLAYER REPORT) ---
-  app.post('/api/admin/players/:xnId/calibrate-telemetry', (req: Request, res: Response) => {
+  app.post('/api/admin/players/:xnId/calibrate-telemetry', requireAdmin, (req: Request, res: Response) => {
     const { xnId } = req.params;
     const {
       kills,
@@ -1843,7 +1996,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST send notification (HoC / Admin broadcast or direct)
-  app.post('/api/notifications/send', (req: Request, res: Response) => {
+  app.post('/api/notifications/send', requireAdmin, (req: Request, res: Response) => {
     const {
       recipientXnId = 'ALL',
       title,
@@ -1937,7 +2090,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // POST create event (HoC / Admin)
-  app.post('/api/events', (req: Request, res: Response) => {
+  app.post('/api/events', requireAdmin, (req: Request, res: Response) => {
     const {
       title,
       eventType = 'TOURNAMENT',
@@ -2005,7 +2158,7 @@ CRITICAL VALIDATION RULES FOR CUSTOM:
   });
 
   // DELETE event
-  app.delete('/api/events/:id', (req: Request, res: Response) => {
+  app.delete('/api/events/:id', requireAdmin, (req: Request, res: Response) => {
     const { id } = req.params;
     const { adminUsername } = req.body;
     const eventIndex = dbEvents.findIndex(e => e.id === id);
